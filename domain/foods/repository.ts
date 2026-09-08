@@ -1,4 +1,9 @@
-import type { Food, FoodNutritionFacts } from "@prisma/client";
+import type {
+  Food,
+  FoodImportRun,
+  FoodNutritionFacts,
+  Prisma,
+} from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import type { FoodNutritionFactsPer100g } from "@/domain/nutrition/calculation";
 
@@ -7,13 +12,26 @@ export interface NutritionFactsProvenance {
   sourceRef?: string;
 }
 
+/** Varsayılan client veya bir `$transaction` callback'i içindeki `tx`. */
+type Db = typeof prisma | Prisma.TransactionClient;
+
+export interface CreateImportRunParams {
+  source: string;
+  requestedCount: number;
+  importedCount: number;
+  duplicateCount: number;
+  mappingErrorCount: number;
+  skippedCount: number;
+  details: unknown;
+}
+
 export const foodsRepository = {
-  async createFood(name: string): Promise<Food> {
-    return prisma.food.create({ data: { name } });
+  async createFood(name: string, db: Db = prisma): Promise<Food> {
+    return db.food.create({ data: { name } });
   },
 
-  async findById(foodId: string): Promise<Food | null> {
-    return prisma.food.findUnique({ where: { id: foodId } });
+  async findById(foodId: string, db: Db = prisma): Promise<Food | null> {
+    return db.food.findUnique({ where: { id: foodId } });
   },
 
   /**
@@ -26,6 +44,7 @@ export const foodsRepository = {
     foodId: string,
     facts: FoodNutritionFactsPer100g,
     provenance: NutritionFactsProvenance,
+    db: Db = prisma,
   ): Promise<FoodNutritionFacts> {
     const data = {
       energyKcalPer100g: facts.energy_kcal_per_100g,
@@ -37,10 +56,53 @@ export const foodsRepository = {
       sourceRef: provenance.sourceRef,
     };
 
-    return prisma.foodNutritionFacts.upsert({
+    return db.foodNutritionFacts.upsert({
       where: { foodId },
       create: { foodId, ...data },
       update: { ...data, verifiedAt: new Date() },
     });
+  },
+
+  /**
+   * `(source, sourceRef)` ile eşleşen facts kaydını arar — bir dış kaynak
+   * kaydının DAHA ÖNCE import edilip edilmediğini belirlemenin TEK yolu
+   * (idempotent import için gerekli). Farklı bir `source` altındaki
+   * (ör. "MANUAL_VERIFIED") kayıtlara asla bu yoldan erişilmez/dokunulmaz —
+   * bu, manuel doğrulanmış verilerin import tarafından ezilmeyeceğinin
+   * yapısal garantisidir.
+   */
+  async findFactsBySourceRef(
+    source: string,
+    sourceRef: string,
+    db: Db = prisma,
+  ): Promise<FoodNutritionFacts | null> {
+    return db.foodNutritionFacts.findUnique({
+      where: { source_sourceRef: { source, sourceRef } },
+    });
+  },
+
+  async createImportRun(
+    params: CreateImportRunParams,
+    db: Db = prisma,
+  ): Promise<FoodImportRun> {
+    return db.foodImportRun.create({
+      data: {
+        source: params.source,
+        requestedCount: params.requestedCount,
+        importedCount: params.importedCount,
+        duplicateCount: params.duplicateCount,
+        mappingErrorCount: params.mappingErrorCount,
+        skippedCount: params.skippedCount,
+        details: params.details as Prisma.InputJsonValue,
+        finishedAt: new Date(),
+      },
+    });
+  },
+
+  /** Bir batch'i tek bir transaction içinde çalıştırmak için. */
+  async runInTransaction<T>(
+    fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    return prisma.$transaction(fn);
   },
 };

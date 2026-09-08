@@ -41,6 +41,14 @@ BİLİNÇLİ OLARAK ayrı bir sözleşme, henüz bir vendor bağlanmadı; AI'nin
 onayıyla `consumed_weight_g`'ye dönüşmesi gerekir. Detaylar:
 [`domain/nutrition/README.md`](domain/nutrition/README.md).
 
+**ADIM 26 güncellemesi:** `FoodNutritionFacts`'e gerçek veri girmenin bir
+yolu daha var: `domain/foods/importUsdaFoods.ts` (USDA FoodData Central'dan
+idempotent toplu import — `(source, sourceRef)` üzerinde DB-seviyesi
+`@@unique` kısıtı, `FoodImportRun` ile audit, `scripts/import-usda-foods.ts`
+CLI'ı, `USDA_FDC_API_KEY` env değişkeni). Alan eşlemesi, provenance,
+duplicate/merge stratejisi ve DEMO_KEY rate limit gerçeği:
+[`domain/foods/README.md`](domain/foods/README.md).
+
 ## Katmanlar
 
 - `app/` — UI (App Router). `app/api/**/route.ts` — API/backend.

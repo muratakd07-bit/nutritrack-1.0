@@ -165,6 +165,10 @@ model FoodNutritionFacts {
 
   /// Veri sağlayıcı izlenebilirliği — "güvenilir kaynak" iddiasının
   /// denetlenebilir kanıtı (ör. "USDA_FDC", "MANUFACTURER_LABEL").
+  /// `sourceRef`, kaynağın ORİJİNAL kimliğidir (ör. USDA fdcId) —
+  /// `(source, sourceRef)` birlikte, bir dış kaydın idempotent olarak
+  /// tekrar import edilip edilmediğini belirlemek için kullanılır
+  /// (bkz. domain/foods/importUsdaFoods.ts).
   source     String
   sourceRef  String?
   verifiedAt DateTime @default(now())
@@ -172,7 +176,31 @@ model FoodNutritionFacts {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([source, sourceRef])
   @@map("food_nutrition_facts")
+}
+
+/// Toplu bir dış kaynak import işleminin (ör. USDA FDC) denetlenebilir
+/// kaydı. `domain/foods/importUsdaFoods.ts` her çalıştırmada bir satır
+/// oluşturur — "kaç food import edildi/atlandı/duplicate/mapping problemi"
+/// sorularının kalıcı, sorgulanabilir cevabıdır.
+model FoodImportRun {
+  id     String @id @default(uuid())
+  source String
+
+  requestedCount  Int
+  importedCount   Int
+  skippedCount    Int
+  duplicateCount  Int
+  mappingErrorCount Int
+
+  /// Atlanan/hatalı kayıtların kısa gerekçeleri (ör. eksik makro, korumalı kayıt).
+  details Json?
+
+  startedAt  DateTime @default(now())
+  finishedAt DateTime?
+
+  @@map("food_import_runs")
 }
 
 /// Bir öğün oturumu (ör. "8 Eylül 2026 sabahki kahvaltı").

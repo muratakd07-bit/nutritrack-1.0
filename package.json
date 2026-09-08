@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:migrate:deploy": "prisma migrate deploy"
+    "db:migrate:deploy": "prisma migrate deploy",
+    "import:usda": "node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/import-usda-foods.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.0",
@@ -32,6 +33,7 @@
     "eslint-config-next": "16.3.4",
     "prisma": "^7.10.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.13",
     "typescript": "^5",
     "vitest": "^5.0.0"
   }
