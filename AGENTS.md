@@ -61,3 +61,14 @@ uydurma bir değerle "çalışıyormuş gibi" davranılmaz.
   bu projede `prisma`'nın `latest` etiketi bir release candidate'e
   (8.0.0-rc.x) işaret ediyordu; kararlı sürüm (`prisma@7.x`) açıkça
   sabitlenmiştir.
+- Next.js 16'da `middleware.ts` dosya konvansiyonu deprecated —
+  yerine kök dizinde `proxy.ts` (export edilen fonksiyon adı `proxy`)
+  kullanılır. Bu projede oturum/token yenileme mantığı `proxy.ts`
+  içindedir (`middleware.ts` DEĞİL).
+- Auth: `lib/auth/supabaseServerClient.ts` / `supabaseBrowserClient.ts`
+  hazır; `proxy.ts` her istekte oturumu yeniler. Login/signup sayfaları
+  `app/login/`, `app/signup/`; e-posta onay linki `app/auth/callback/`.
+  `public.users` satırı, gerçek Supabase projesine uygulanan
+  `supabase/auth-triggers.sql` (auth.users → public.users trigger'ı) ile
+  otomatik oluşturulur — bu dosya da RLS gibi Prisma migration akışının
+  parçası değildir, ayrıca uygulanması gerekir.

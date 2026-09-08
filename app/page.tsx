@@ -1,6 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { createSupabaseBrowserClient } from "@/lib/auth/supabaseBrowserClient";
 
 type Meal = {
   name: string;
@@ -46,7 +49,42 @@ const demoMeals: Meal[] = [
 // kaynağından gelecektir. Bu component herhangi bir beslenme hesabı yapmaz.
 
 export default function Home() {
+  const router = useRouter();
   const [activeNav, setActiveNav] = useState("Ana Sayfa");
+  const [isSignedIn, setIsSignedIn] = useState<boolean | null>(null);
+
+  // Oturum durumu yalnızca header'daki Giriş/Çıkış kontrolü için okunur;
+  // aşağıdaki demo beslenme verileri bundan etkilenmez (ADIM 16 bağlanana
+  // kadar bu component hiçbir nutrition hesabı yapmaz).
+  useEffect(() => {
+    let supabase;
+    try {
+      supabase = createSupabaseBrowserClient();
+    } catch {
+      // Supabase yapılandırılmamışsa Giriş/Çıkış kontrolünü sessizce gizle;
+      // demo dashboard yine de çalışmaya devam eder.
+      return;
+    }
+
+    supabase.auth.getSession().then(({ data }) => {
+      setIsSignedIn(data.session !== null);
+    });
+
+    const { data: subscription } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setIsSignedIn(session !== null);
+      },
+    );
+
+    return () => subscription.subscription.unsubscribe();
+  }, []);
+
+  async function handleLogout() {
+    const supabase = createSupabaseBrowserClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
+  }
 
   const calories = 525;
   const calorieGoal = 2200;
@@ -74,8 +112,29 @@ export default function Home() {
             </h1>
           </div>
 
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100 font-semibold text-emerald-700">
-            M
+          <div className="flex items-center gap-3">
+            {isSignedIn === true && (
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="text-sm font-medium text-slate-500 transition hover:text-slate-700"
+              >
+                Çıkış Yap
+              </button>
+            )}
+
+            {isSignedIn === false && (
+              <Link
+                href="/login"
+                className="text-sm font-medium text-emerald-600 transition hover:text-emerald-700"
+              >
+                Giriş Yap
+              </Link>
+            )}
+
+            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100 font-semibold text-emerald-700">
+              M
+            </div>
           </div>
         </div>
       </header>
