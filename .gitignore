@@ -32,6 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# .env.example bir şablondur, gerçek secret içermez — commit edilmeli.
+!.env.example
 
 # secrets / credentials — never commit
 *.key

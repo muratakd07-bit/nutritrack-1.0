@@ -1,0 +1,183 @@
+// NutriTrack veritabanı şeması.
+//
+// Teknoloji: PostgreSQL (hedef: Supabase-managed Postgres, prod).
+// Neden: bkz. AGENTS.md "NutriTrack Mimari Kuralları" bölümü.
+//
+// KRİTİK KURAL: Bu şemada saklanan enerjiKcal/proteinG/carbohydratesG/fatG/fiberG
+// alanları (MealItem üzerinde) YALNIZCA ADIM 16 nutrition source of truth
+// sözleşmesinin (bkz. domain/nutrition/contract.ts) döndürdüğü değerlerin
+// bire bir kaydıdır. Hiçbir servis bu alanları kendi formülüyle hesaplayıp
+// yazamaz — bkz. domain/nutrition/README.md.
+
+// Prisma 7: bağlantı URL'si artık burada değil, prisma.config.ts (CLI için)
+// ve lib/db/prisma.ts içindeki driver adapter (runtime için) üzerinden
+// sağlanıyor. bkz. https://pris.ly/d/prisma7-client-config
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum MealType {
+  BREAKFAST
+  LUNCH
+  DINNER
+  SNACK
+}
+
+enum RecordStatus {
+  ACTIVE
+  DELETED
+}
+
+enum GoalSetBy {
+  SYSTEM
+  TRAINER
+}
+
+/// Uygulama kullanıcı profili.
+/// `id`, Supabase Auth tarafındaki `auth.users.id` (uuid) ile birebir aynı
+/// değeri taşır (profil satırı, kullanıcı ilk giriş yaptığında uygulama
+/// tarafında oluşturulur). Yerel geliştirmede (Supabase `auth` şeması
+/// bulunmadığında) taşınabilirliği korumak için buraya `auth.users`'a sabit
+/// bir Prisma-seviyesi foreign key eklenmemiştir; bu ilişki prod'da
+/// Supabase tarafında (bkz. supabase/rls-policies.sql) korunur.
+model User {
+  id          String   @id
+  email       String   @unique
+  displayName String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  trainerProfile     Trainer?
+  trainerAssignments TrainerAssignment[]  @relation("ClientAssignments")
+  meals              Meal[]
+  mealItems          MealItem[]
+  nutritionGoals     DailyNutritionGoal[]
+
+  @@map("users")
+}
+
+/// Eğitmen (trainer/PT) profili. Şimdilik minimal: ileride PT sistemi
+/// (mesajlaşma, programlar vb.) bu model üzerine genişletilebilir.
+model Trainer {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio       String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clients TrainerAssignment[]
+
+  @@map("trainers")
+}
+
+/// Bir trainer'ın hangi kullanıcılara (client) atandığını tutan ilişki tablosu.
+model TrainerAssignment {
+  id           String   @id @default(uuid())
+  trainerId    String
+  trainer      Trainer  @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+  clientUserId String
+  client       User     @relation("ClientAssignments", fields: [clientUserId], references: [id], onDelete: Cascade)
+  assignedAt   DateTime @default(now())
+
+  @@unique([trainerId, clientUserId])
+  @@map("trainer_assignments")
+}
+
+/// Günlük nutrition hedefleri.
+/// KURAL: Bu tabloya yazma işlemi yalnızca trainer veya sistem varsayılanı
+/// tarafından yapılabilir (bkz. domain/goals/service.ts). AI/coach modülleri
+/// bu tabloyu yalnızca OKUYABİLİR, asla yazamaz.
+model DailyNutritionGoal {
+  id             String    @id @default(uuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  energyKcal     Float
+  proteinG       Float
+  carbohydratesG Float
+  fatG           Float
+  fiberG         Float
+  waterMl        Float
+  setBy          GoalSetBy
+  setByTrainerId String?
+  effectiveFrom  DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([userId, effectiveFrom])
+  @@map("daily_nutrition_goals")
+}
+
+/// Besin kimliği/referansı. KASITLI OLARAK burada kcal/protein/karbonhidrat/
+/// yağ/fiber gibi besin değerleri TUTULMAZ — bu değerlerin kaynağı ve
+/// hesaplama algoritması ADIM 16'nın sorumluluğundadır ve henüz bu projede
+/// doğrulanmış bir veri kaynağı yoktur (bkz. domain/nutrition/README.md).
+model Food {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  mealItems MealItem[]
+
+  @@map("foods")
+}
+
+/// Bir öğün oturumu (ör. "8 Eylül 2026 sabahki kahvaltı").
+/// Gerçek besin kayıtları MealItem üzerinde tutulur.
+model Meal {
+  id         String       @id @default(uuid())
+  userId     String
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mealType   MealType
+  consumedAt DateTime     @default(now())
+  status     RecordStatus @default(ACTIVE)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  items MealItem[]
+
+  @@index([userId, consumedAt])
+  @@map("meals")
+}
+
+/// Bir öğün içindeki tek bir besin kaydı.
+///
+/// energyKcal / proteinG / carbohydratesG / fatG / fiberG alanları:
+/// ADIM 16 nutrition source of truth sözleşmesinin (domain/nutrition/contract.ts)
+/// bu kayıt oluşturulduğu andaki ÇIKTISININ DEĞİŞTİRİLMEDEN kaydıdır
+/// (tarihsel doğruluk için anlık görüntü/snapshot). Bu alanları hiçbir
+/// servis kendi matematiğiyle yeniden hesaplayıp güncelleyemez.
+model MealItem {
+  id              String       @id @default(uuid())
+  mealId          String
+  meal            Meal         @relation(fields: [mealId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  foodId          String
+  food            Food         @relation(fields: [foodId], references: [id])
+  consumedWeightG Float
+  mealType        MealType
+
+  // --- ADIM 16 calculated_nutrition anlık görüntüsü (salt okunur snapshot) ---
+  energyKcal     Float
+  proteinG       Float
+  carbohydratesG Float
+  fatG           Float
+  fiberG         Float
+
+  status         RecordStatus @default(ACTIVE)
+  /// İstemci tarafından üretilen, tekrarlı gönderimleri (ör. çift tıklama)
+  /// engellemek için kullanılan idempotency anahtarı.
+  idempotencyKey String?      @unique
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([userId, mealId])
+  @@index([userId, mealType, createdAt])
+  @@map("meal_items")
+}
