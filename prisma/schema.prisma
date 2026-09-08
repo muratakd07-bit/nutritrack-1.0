@@ -126,19 +126,53 @@ model DailyNutritionGoal {
   @@map("daily_nutrition_goals")
 }
 
-/// Besin kimliği/referansı. KASITLI OLARAK burada kcal/protein/karbonhidrat/
-/// yağ/fiber gibi besin değerleri TUTULMAZ — bu değerlerin kaynağı ve
-/// hesaplama algoritması ADIM 16'nın sorumluluğundadır ve henüz bu projede
-/// doğrulanmış bir veri kaynağı yoktur (bkz. domain/nutrition/README.md).
+/// Besin kimliği/referansı. Besin değerleri burada DEĞİL, ayrı
+/// `FoodNutritionFacts` tablosunda tutulur (bkz. aşağısı) — bir Food'un
+/// "doğrulanmış değeri var mı yok mu" durumu bu ayrımla netleşir.
 model Food {
   id        String   @id @default(uuid())
   name      String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  mealItems MealItem[]
+  mealItems      MealItem[]
+  nutritionFacts FoodNutritionFacts?
 
   @@map("foods")
+}
+
+/// Bir Food için DOĞRULANMIŞ, 100 gram başına besin değerleri.
+///
+/// ADIM 16 nutrition source of truth hesaplamasının (bkz.
+/// domain/nutrition/contract.ts) TEK veri kaynağıdır. Bu tablo kasıtlı
+/// olarak boş başlar — buraya yazılacak her satır gerçek, doğrulanabilir
+/// bir kaynaktan (ör. USDA FoodData Central, üretici etiketi) gelmeli ve
+/// `source`/`sourceRef` ile izlenebilir olmalıdır. Bu proje hiçbir zaman
+/// buraya uydurma bir değer YAZMAZ — veri girişi yalnızca ADMIN rolü
+/// tarafından, `domain/foods/service.ts` üzerinden yapılır.
+model FoodNutritionFacts {
+  id     String @id @default(uuid())
+  foodId String @unique
+  food   Food   @relation(fields: [foodId], references: [id], onDelete: Cascade)
+
+  /// 100 gram başına değerler — domain/nutrition/calculation.ts bu birimden
+  /// consumed_weight_g'ye ölçekler.
+  energyKcalPer100g     Float
+  proteinGPer100g       Float
+  carbohydratesGPer100g Float
+  fatGPer100g           Float
+  fiberGPer100g         Float
+
+  /// Veri sağlayıcı izlenebilirliği — "güvenilir kaynak" iddiasının
+  /// denetlenebilir kanıtı (ör. "USDA_FDC", "MANUFACTURER_LABEL").
+  source     String
+  sourceRef  String?
+  verifiedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("food_nutrition_facts")
 }
 
 /// Bir öğün oturumu (ör. "8 Eylül 2026 sabahki kahvaltı").

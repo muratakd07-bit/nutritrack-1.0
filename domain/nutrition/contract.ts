@@ -2,14 +2,14 @@ import type {
   CalculatedNutrition,
   NutritionCalculationInput,
 } from "@/types/nutrition";
+import { nutritionRepository } from "./repository";
+import { scaleNutritionFactsToWeight } from "./calculation";
 
 /**
  * ADIM 16 — NutriTrack'in TEK nutrition source of truth sözleşmesi.
  *
  * Bu arayüzü implemente eden servis, NutriTrack genelinde enerji/protein/
- * karbonhidrat/yağ/fiber değerlerini üretebilecek TEK yerdir. Bu dosya
- * KASITLI OLARAK gerçek bir hesaplama algoritması İÇERMEZ: gerçek besin
- * veritabanı ve hesaplama kuralları henüz bu projede doğrulanmamıştır.
+ * karbonhidrat/yağ/fiber değerlerini üretebilecek TEK yerdir.
  *
  * Bu sınırı ihlal etmeyin:
  *   - Frontend bu sonuçları kendi matematiğiyle üretemez/değiştiremez.
@@ -19,6 +19,9 @@ import type {
  *   - Toplama/aggregation (ör. günlük toplam) bu kuralı ihlal etmez, çünkü
  *     zaten hesaplanmış değerleri topluyor olmak yeni bir nutrition sonucu
  *     ÜRETMEK değildir — bkz. domain/reports/dailySummary.ts.
+ *   - `input.consumed_weight_g` HER ZAMAN kullanıcı tarafından doğrulanmış
+ *     ağırlıktır — bir AI tahmini (bkz. domain/nutrition/foodRecognition.ts)
+ *     asla doğrudan buraya girmez.
  */
 export interface NutritionSourceOfTruth {
   getCalculatedNutrition(
@@ -27,30 +30,40 @@ export interface NutritionSourceOfTruth {
 }
 
 /**
- * ADIM 16 henüz bu projede implemente edilmedi (gerçek food database ve
- * hesaplama kaynağı doğrulanmadı). Bu hata, sözleşmenin çağrıldığını ama
- * arkasında henüz gerçek bir kaynak olmadığını AÇIKÇA belli eder — sessizce
- * uydurma bir değer döndürmek yerine.
+ * `food_id` için doğrulanmış besin değeri (FoodNutritionFacts) henüz
+ * girilmemiş. Bu, "ADIM 16 implemente edilmedi" değil — hesaplama
+ * MEKANİZMASI tam olarak çalışıyor, yalnızca bu belirli besin için gerçek
+ * veri henüz sisteme (bkz. domain/foods/service.ts, ADMIN-only) girilmemiş.
+ * Sessizce uydurma bir değer döndürmek yerine bu hata fırlatılır.
  */
-export class NutritionSourceNotImplementedError extends Error {
-  constructor(input: NutritionCalculationInput) {
+export class FoodNutritionFactsNotFoundError extends Error {
+  constructor(foodId: string) {
     super(
-      `ADIM 16 nutrition source of truth henüz implemente edilmedi. ` +
-        `food_id=${input.food_id} için calculated_nutrition üretilemiyor. ` +
-        `Gerçek veri kaynağı doğrulanmadan bu değer uydurulmamalıdır.`,
+      `food_id=${foodId} için doğrulanmış besin değeri (FoodNutritionFacts) ` +
+        `bulunamadı. Gerçek veri kaynağı doğrulanmadan bu değer uydurulmaz — ` +
+        `bkz. domain/foods/service.ts (ADMIN tarafından doğrulanmış veri girişi).`,
     );
-    this.name = "NutritionSourceNotImplementedError";
+    this.name = "FoodNutritionFactsNotFoundError";
   }
 }
 
 /**
- * Varsayılan (production) implementasyon: ADIM 16 bağlanana kadar bilinçli
- * olarak "not implemented" hatası fırlatır. Böylece yanlışlıkla uydurma bir
- * değerle çağrı zinciri devam edemez; hata, çağıran API katmanında 501
- * (Not Implemented) olarak yüzeye çıkar.
+ * Gerçek (production) implementasyon: `food_id`'nin doğrulanmış 100g başına
+ * değerlerini okur ve `consumed_weight_g`'ye deterministik olarak ölçekler
+ * (bkz. domain/nutrition/calculation.ts). Facts kaydı yoksa
+ * `FoodNutritionFactsNotFoundError` fırlatır — asla varsayılan/tahmini bir
+ * değerle devam etmez.
  */
 export const nutritionSourceOfTruth: NutritionSourceOfTruth = {
   async getCalculatedNutrition(input) {
-    throw new NutritionSourceNotImplementedError(input);
+    const facts = await nutritionRepository.getFoodNutritionFacts(
+      input.food_id,
+    );
+
+    if (!facts) {
+      throw new FoodNutritionFactsNotFoundError(input.food_id);
+    }
+
+    return scaleNutritionFactsToWeight(facts, input.consumed_weight_g);
   },
 };

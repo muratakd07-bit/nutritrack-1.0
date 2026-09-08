@@ -6,7 +6,7 @@ import {
   createMealItemForUser,
   listMealItemsForUser,
 } from "@/domain/meal/service";
-import { NutritionSourceNotImplementedError } from "@/domain/nutrition/contract";
+import { FoodNutritionFactsNotFoundError } from "@/domain/nutrition/contract";
 import { IdempotencyKeyConflictError } from "@/domain/meal/repository";
 
 /**
@@ -14,9 +14,11 @@ import { IdempotencyKeyConflictError } from "@/domain/meal/repository";
  *
  * Bu route calculated_nutrition değerlerini KENDİSİ ÜRETMEZ; yalnızca
  * validate edilmiş girdiyi domain/meal/service.ts'e iletir, o da ADIM 16
- * sözleşmesini çağırır. ADIM 16 henüz bağlanmadığı için bu uç nokta şu an
- * 501 (Not Implemented) döner — bu, mimari sınırın doğru çalıştığının
- * kanıtıdır, bir hata değildir.
+ * sözleşmesini (domain/nutrition/contract.ts) çağırır. Belirtilen food_id
+ * için doğrulanmış besin değeri (FoodNutritionFacts) henüz sisteme
+ * girilmemişse 404 döner — bu MEKANİZMANIN çalıştığının kanıtıdır (ADIM 16
+ * artık gerçek bir hesaplama motoruyla implemente edilmiştir), eksik olan
+ * sadece o besinin verisidir.
  *
  * Not: POST her zaman ÇAĞIRANIN kendi hesabına yazar (başka bir kullanıcı
  * adına meal item oluşturma yetkisi kimseye — trainer'a bile — verilmez).
@@ -44,13 +46,13 @@ export async function POST(request: Request) {
       const mealItem = await createMealItemForUser(userId, parsed.data);
       return NextResponse.json({ data: mealItem }, { status: 201 });
     } catch (error) {
-      if (error instanceof NutritionSourceNotImplementedError) {
+      if (error instanceof FoodNutritionFactsNotFoundError) {
         return NextResponse.json(
           {
-            error: "nutrition_source_not_implemented",
+            error: "food_nutrition_facts_not_found",
             message: error.message,
           },
-          { status: 501 },
+          { status: 404 },
         );
       }
       if (error instanceof IdempotencyKeyConflictError) {

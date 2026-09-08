@@ -24,11 +24,22 @@ Hiçbir frontend, API endpoint, rapor, coach/AI, personalization, analytics
 veya notification modülü bu değerleri kendi içinde **yeniden hesaplayamaz**.
 Bir modülün nutrition değerine ihtiyacı varsa, ya ADIM 16 sözleşmesini
 (`NutritionSourceOfTruth`) çağırır ya da zaten hesaplanıp `MealItem` üzerinde
-snapshot'lanmış değerleri okur/toplar. Gerçek besin veritabanı ve hesaplama
-algoritması henüz doğrulanmadığı için `contract.ts`'teki varsayılan
-implementasyon bilinçli olarak `NutritionSourceNotImplementedError` fırlatır
-— bu, gerçek ADIM 16 kaynağı bağlanana kadar BEKLENEN bir davranıştır,
-uydurma bir değerle "çalışıyormuş gibi" davranılmaz.
+snapshot'lanmış değerleri okur/toplar.
+
+**ADIM 25 güncellemesi:** Hesaplama MEKANİZMASI artık gerçek —
+`domain/nutrition/calculation.ts` (saf, deterministik, 100g→consumed_weight_g
+ölçekleme) + `domain/nutrition/repository.ts` (`FoodNutritionFacts`
+okuma). Ama `FoodNutritionFacts` verisi hâlâ uydurulmuyor: tablo boş
+başlar, yalnızca ADMIN rolü `domain/foods/service.ts` →
+`createVerifiedFood` ile (zorunlu `source`/`source_ref` izlenebilirliğiyle)
+gerçek veri girebilir. Bir food için facts yoksa `contract.ts`
+`FoodNutritionFactsNotFoundError` fırlatır (`NutritionSourceNotImplementedError`
+DEĞİL artık — mekanizma çalışıyor, sadece o besinin verisi eksik).
+Fotoğraftan besin tanıma (AI) `domain/nutrition/foodRecognition.ts`'te
+BİLİNÇLİ OLARAK ayrı bir sözleşme, henüz bir vendor bağlanmadı; AI'nin
+`estimated_weight_g`'si asla doğrudan hesaplamaya girmez, önce kullanıcı
+onayıyla `consumed_weight_g`'ye dönüşmesi gerekir. Detaylar:
+[`domain/nutrition/README.md`](domain/nutrition/README.md).
 
 ## Katmanlar
 
