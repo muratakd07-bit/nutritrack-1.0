@@ -1,13 +1,22 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { mapAuthErrorToResponse, requireUserId } from "@/lib/authz/guard";
-import { photoAnalysisInputSchema } from "@/lib/validation/foodRecognition";
+import {
+  ALLOWED_IMAGE_MIME_TYPES,
+  photoAnalysisInputSchema,
+} from "@/lib/validation/foodRecognition";
 import { checkRateLimit } from "@/lib/rateLimit/simpleRateLimiter";
 import { analyzeFoodPhoto } from "@/domain/nutrition/photoAnalysis";
 import { FoodRecognitionNotImplementedError } from "@/domain/nutrition/foodRecognition";
 import { createDeterministicMockSource } from "@/domain/nutrition/foodRecognitionMock";
+import { createSupabaseServerClient } from "@/lib/auth/supabaseServerClient";
+import {
+  downloadMealPhotoAsBase64,
+  isOwnedPath,
+  MealPhotoAccessError,
+} from "@/lib/storage/mealPhotos";
 
-/** ~8MB — base64 şişme faktörü (4/3) hesaba katılarak kontrol edilir. */
+/** Storage bucket'ındaki (allowed_mime_types) limitle aynı — bkz. supabase/storage-setup.sql. */
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const RATE_LIMIT_MAX_REQUESTS = 10;
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -15,20 +24,18 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 /**
  * POST /api/meals/analyze-photo — bir yemek fotoğrafını analiz eder.
  *
+ * ADIM 27 (Storage): İstemci fotoğrafı ÖNCE kendi private Storage
+ * klasörüne (`{userId}/...`, bkz. supabase/storage-setup.sql) yükler,
+ * sonra bu uç noktaya yalnızca `storage_path` referansını gönderir —
+ * büyük bir base64 payload'u DOĞRUDAN bu isteğe koymaz. Gerçek indirme,
+ * ÇAĞIRANIN kendi oturumuna bağlı (RLS'ye tabi) bir Supabase client'ıyla
+ * yapılır — bir kullanıcı başka bir kullanıcının fotoğrafını path'i
+ * tahmin etse bile indiremez (RLS + ek `isOwnedPath` ön kontrolü).
+ *
  * KRİTİK: Bu uç nokta HİÇBİR MealItem OLUŞTURMAZ. Sonuç, kullanıcının
  * onaylayıp/düzelteceği GEÇİCİ bir öneridir — sunucu tarafında
- * SAKLANMAZ (stateless: istemci sonucu tutar, onayladığında normal
- * `POST /api/meals`'e MealItemInput olarak gönderir — bkz. o route,
- * DEĞİŞMEDİ). Onaylanmamış bir analiz sonucundan meal item oluşturmanın
- * hiçbir kod yolu yoktur.
- *
- * GÜVENLİK:
- *  - Kimlik doğrulama zorunlu (fail-closed, diğer route'larla aynı desen).
- *  - Kullanıcı başına basit rate limit (bkz. lib/rateLimit — tek-instance
- *    sınırlamasıyla, dokümante edilmiş).
- *  - Görsel boyutu/MIME tipi doğrulanır (aşırı büyük/yanlış tipte dosya
- *    reddedilir).
- *  - AI çıktısı zod ile doğrulanır (bkz. domain/nutrition/photoAnalysis.ts).
+ * SAKLANMAZ. Onaylanmamış bir analiz sonucundan meal item oluşturmanın
+ * hiçbir kod yolu yoktur (bkz. domain/nutrition/README.md).
  */
 export async function POST(request: Request) {
   try {
@@ -59,19 +66,51 @@ export async function POST(request: Request) {
       );
     }
 
-    const approxBytes = (parsed.data.image_base64.length * 3) / 4;
+    const { storage_path: storagePath } = parsed.data;
+
+    // Hızlı ön kontrol (RLS zaten aynı şeyi garanti eder — bu, gereksiz bir
+    // Storage isteği yapmadan net bir 403 dönebilmek için).
+    if (!isOwnedPath(storagePath, userId)) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+
+    const supabase = await createSupabaseServerClient();
+    let photo: { base64: string; mimeType: string };
+    try {
+      photo = await downloadMealPhotoAsBase64(supabase, storagePath);
+    } catch (error) {
+      if (error instanceof MealPhotoAccessError) {
+        return NextResponse.json({ error: "photo_not_found" }, { status: 404 });
+      }
+      throw error;
+    }
+
+    const approxBytes = (photo.base64.length * 3) / 4;
     if (approxBytes > MAX_IMAGE_BYTES) {
       return NextResponse.json({ error: "image_too_large" }, { status: 413 });
+    }
+    if (
+      !ALLOWED_IMAGE_MIME_TYPES.includes(
+        photo.mimeType as (typeof ALLOWED_IMAGE_MIME_TYPES)[number],
+      )
+    ) {
+      return NextResponse.json({ error: "unsupported_mime_type" }, { status: 400 });
     }
 
     // Yalnızca açıkça istenirse (geliştirme/deneme) deterministik mock
     // kullanılır — production varsayılanı DEĞİLDİR.
     const recognitionSource =
       process.env.AI_FOOD_RECOGNITION_MODE === "mock"
-        ? createDeterministicMockSource(parsed.data)
+        ? createDeterministicMockSource({
+            image_base64: photo.base64,
+            mime_type: photo.mimeType,
+          })
         : undefined;
 
-    const result = await analyzeFoodPhoto(parsed.data, { recognitionSource });
+    const result = await analyzeFoodPhoto(
+      { image_base64: photo.base64, mime_type: photo.mimeType },
+      { recognitionSource },
+    );
     return NextResponse.json({ data: result });
   } catch (error) {
     if (error instanceof FoodRecognitionNotImplementedError) {
@@ -82,7 +121,10 @@ export async function POST(request: Request) {
     }
     if (error instanceof ZodError) {
       return NextResponse.json(
-        { error: "ai_output_invalid", message: "AI sağlayıcısının yanıtı geçersiz/güvensiz." },
+        {
+          error: "ai_output_invalid",
+          message: "AI sağlayıcısının yanıtı geçersiz/güvensiz.",
+        },
         { status: 502 },
       );
     }

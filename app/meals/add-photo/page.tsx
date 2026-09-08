@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useState, type ChangeEvent } from "react";
 import { MEAL_TYPES, type MealType } from "@/types/meal";
 import type { CalculatedNutrition } from "@/types/nutrition";
+import { createSupabaseBrowserClient } from "@/lib/auth/supabaseBrowserClient";
+import { MEAL_PHOTOS_BUCKET, buildMealPhotoPath } from "@/lib/storage/mealPhotos";
 
 interface AnalyzedCandidate {
   food_id: string;
@@ -24,20 +26,13 @@ interface PhotoAnalysisResult {
   is_unrecognized: boolean;
 }
 
-type Step = "upload" | "analyzing" | "review" | "submitting" | "done";
+type Step = "upload" | "uploading" | "analyzing" | "review" | "submitting" | "done";
 
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      // "data:image/jpeg;base64,AAAA..." -> yalnızca base64 kısmı.
-      resolve(result.split(",")[1] ?? "");
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+const MIME_TO_EXTENSION: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
 
 export default function AddPhotoPage() {
   const router = useRouter();
@@ -55,14 +50,39 @@ export default function AddPhotoPage() {
     if (!file) return;
 
     setError(null);
-    setStep("analyzing");
+    setStep("uploading");
 
     try {
-      const base64 = await fileToBase64(file);
+      const supabase = createSupabaseBrowserClient();
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError || !userData.user) {
+        setError("Devam etmek için giriş yapmalısın.");
+        setStep("upload");
+        return;
+      }
+
+      // Fotoğraf DOĞRUDAN kullanıcının kendi private Storage klasörüne
+      // yüklenir — API'ye büyük bir base64 payload GÖNDERİLMEZ, yalnızca
+      // küçük bir referans (storage_path) gönderilecek.
+      const extension = MIME_TO_EXTENSION[file.type] ?? "jpg";
+      const storagePath = buildMealPhotoPath(userData.user.id, extension);
+
+      const { error: uploadError } = await supabase.storage
+        .from(MEAL_PHOTOS_BUCKET)
+        .upload(storagePath, file, { contentType: file.type });
+
+      if (uploadError) {
+        setError("Fotoğraf yüklenemedi: " + uploadError.message);
+        setStep("upload");
+        return;
+      }
+
+      setStep("analyzing");
+
       const response = await fetch("/api/meals/analyze-photo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_base64: base64, mime_type: file.type }),
+        body: JSON.stringify({ storage_path: storagePath }),
       });
 
       const body = await response.json();
@@ -157,6 +177,12 @@ export default function AddPhotoPage() {
                 />
               </label>
             </div>
+          )}
+
+          {step === "uploading" && (
+            <p className="mt-6 text-center text-sm text-slate-500">
+              Fotoğraf yükleniyor...
+            </p>
           )}
 
           {step === "analyzing" && (

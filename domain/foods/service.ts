@@ -18,14 +18,24 @@ export interface CreateVerifiedFoodInput {
  * "güvenilir food database/source" kuralının veri girişi tarafındaki
  * karşılığıdır: Claude/otomatik kod hiçbir zaman buraya bir besinin gerçek
  * kalori/makro değerini kendisi üretip yazmaz.
+ *
+ * ATOMİKLİK: `createFood` + `upsertNutritionFacts` tek bir transaction'da
+ * yapılır. Bunsuz, ikinci adım (ör. `(source, sourceRef)` unique
+ * kısıtı ihlali) başarısız olduğunda ilk adımda oluşturulan Food satırı
+ * sahipsiz (facts'siz) kalırdı — bu tam olarak ADIM 27 sırasında bir
+ * entegrasyon testinde gözlemlenip düzeltilen gerçek bir hataydı.
  */
 export async function createVerifiedFood(
   input: CreateVerifiedFoodInput,
 ): Promise<Food> {
-  const food = await foodsRepository.createFood(input.name);
-  await foodsRepository.upsertNutritionFacts(food.id, input.facts, {
-    source: input.source,
-    sourceRef: input.sourceRef,
+  return foodsRepository.runInTransaction(async (tx) => {
+    const food = await foodsRepository.createFood(input.name, tx);
+    await foodsRepository.upsertNutritionFacts(
+      food.id,
+      input.facts,
+      { source: input.source, sourceRef: input.sourceRef },
+      tx,
+    );
+    return food;
   });
-  return food;
 }

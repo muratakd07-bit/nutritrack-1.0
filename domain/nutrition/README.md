@@ -44,27 +44,62 @@ ADMIN rolü tarafından [`domain/foods/service.ts`](../foods/service.ts) →
 `app/api/admin/foods/route.ts`. Otomatik kod (Claude dahil) bir besinin
 gerçek kalori/makro değerini asla kendisi üretip bu tabloya yazmaz.
 
-## AI (fotoğraftan besin tanıma) — ADIM 27, hâlâ ayrı, gerçek vendor'a bağlı değil
+## AI (fotoğraftan besin tanıma) — ADIM 27
 
 [`foodRecognition.ts`](./foodRecognition.ts), `contract.ts`'ten BİLİNÇLİ
-OLARAK ayrı bir sözleşmedir. `QWEN3_VL_ENDPOINT_URL` tanımlı değilse
-varsayılan implementasyon `FoodRecognitionNotImplementedError` fırlatır —
-[`qwen3vlClient.ts`](./qwen3vlClient.ts) yazıldı ama **gerçek bir Qwen3-VL
-endpoint'ine karşı canlı doğrulanamadı** (USDA entegrasyonunun aksine —
-bkz. dosyanın kendi üstündeki not). Bu yüzden bu entegrasyon
+OLARAK ayrı bir sözleşmedir. `QWEN3_VL_BASE_URL`/`QWEN3_VL_API_KEY`
+tanımlı değilse varsayılan implementasyon `FoodRecognitionNotImplementedError`
+fırlatır.
+
+[`qwen3vlClient.ts`](./qwen3vlClient.ts), Alibaba Cloud Model Studio
+(DashScope) OpenAI-uyumlu modunu hedefler. **İstek/yanıt FORMATI**
+2026-09-09'da `alibabacloud.com/help/en/model-studio/vision` adresinden
+CANLI doğrulandı — USDA entegrasyonuyla (ADIM 26) aynı titizlikle,
+varsayılmadı: `{base_url}/chat/completions`, görsel
+`image_url: { url: "data:{mime};base64,{data}" }` (standart OpenAI
+vision veri-URI'si), kimlik doğrulama `Authorization: Bearer <key>`,
+yanıt `choices[0].message.content` (serbest metin — bu yüzden modele
+YALNIZCA JSON döndürmesini isteyen bir prompt kullanılır ve dönen metin
+ayrıştırılıp zod ile doğrulanır). Timeout (20sn) ve 5xx/ağ hatalarında
+tek seferlik retry var; 4xx'te retry YOK.
+
+**Ama CANLI ÇAĞRI hâlâ doğrulanamadı** — gerçek bir Qwen3-VL API key'i
+yok, bu yüzden modelin prompt'a GERÇEKTEN nasıl yanıt verdiği (ör. JSON
+formatına ne kadar sadık kaldığı) test edilemedi. Format dokümantasyona
+göre doğru; davranış canlı doğrulanmadı. Bu yüzden bu entegrasyon
 "production-ready" DEĞİLDİR.
 
-Akış (ADIM 27): fotoğraf → [`foodRecognition.ts`](./foodRecognition.ts)
-(aday İSİMLER + tahmini ağırlık + görsel açıklama, food_id DEĞİL) →
-şema doğrulaması (bkz. `lib/validation/foodRecognition.ts` — confidence
-[0,1]'e, ağırlık gerçekçi bir üst sınıra sıkıştırılır; bu, manipüle
-edilmiş/"prompt injection" içeren bir görselin saçma bir değeri modele
-"söyletmesine" karşı savunmadır) → [`domain/foods/foodMatcher.ts`](../foods/foodMatcher.ts)
+Akış (ADIM 27, Storage ile güncellendi):
+fotoğraf → istemci kendi private Storage klasörüne (`{userId}/...`,
+bkz. `supabase/storage-setup.sql`) YÜKLER → yalnızca `storage_path`
+referansı `POST /api/meals/analyze-photo`'ya gönderilir (büyük base64
+payload API isteğine KONMAZ) → sunucu, ÇAĞIRANIN kendi oturumuna bağlı
+(RLS'ye tabi) bir client'la dosyayı indirir (bkz. `lib/storage/mealPhotos.ts`)
+→ [`foodRecognition.ts`](./foodRecognition.ts) (aday İSİMLER + tahmini
+ağırlık + görsel açıklama, food_id DEĞİL) → şema doğrulaması (bkz.
+`lib/validation/foodRecognition.ts` — confidence [0,1]'e, ağırlık
+gerçekçi bir üst sınıra sıkıştırılır; bu, manipüle edilmiş/"prompt
+injection" içeren bir görselin saçma bir değeri modele "söyletmesine"
+karşı savunmadır) → [`domain/foods/foodMatcher.ts`](../foods/foodMatcher.ts)
 (isimden GERÇEK food_id'ye eşleme: önce yerel DB, gerekiyorsa kontrollü
 USDA fallback + otomatik import) → [`photoAnalysis.ts`](./photoAnalysis.ts)
 (orkestrasyon + belirsizlik/düşük-güven tespiti) → **KULLANICI ONAYI** →
 `MealItemInput` → `domain/meal/service.ts` (DEĞİŞMEDİ) →
 `contract.ts` (bu dosya, DEĞİŞMEDİ).
+
+## Fotoğraf saklama (ADIM 27)
+
+Fotoğraflar Supabase Storage'ın PRIVATE `meal-photos` bucket'ında tutulur
+(bkz. `supabase/storage-setup.sql`, canlı olarak
+`supabase.com/docs/guides/storage/security/access-control`'dan
+doğrulanmış RLS deseniyle). Her kullanıcı yalnızca kendi `{userId}/`
+klasörüne yazabilir/okuyabilir (`storage.foldername(name)[1] = auth.uid()::text`).
+Bucket seviyesinde `file_size_limit` (8MB) ve `allowed_mime_types`
+(jpeg/png/webp) zorunlu kılınır; bu, uygulama-seviyesi doğrulamaya EK bir
+katmandır, onun YERİNE geçmez — route hem indirilen dosyanın boyutunu/
+mime tipini tekrar kontrol eder hem de zod ile input şeklini doğrular.
+Hiçbir kalıcı/genel (public) URL üretilmez; erişim daima sahibinin
+oturumu üzerinden, RLS ile denetlenir.
 
 **Kritik ayrım (değişmedi, şimdi daha somut):** `PhotoAnalysisResult`'ın
 hiçbir alanı (`estimated_weight_g` dahil) `MealItemInput`'un gerektirdiği

@@ -6,10 +6,25 @@ export const ALLOWED_IMAGE_MIME_TYPES = [
   "image/webp",
 ] as const;
 
-/** İstemciden gelen fotoğraf analizi isteği. */
+/**
+ * İstemciden gelen fotoğraf analizi isteği.
+ *
+ * ADIM 27 (Storage): İstemci artık büyük bir base64 payload'u DOĞRUDAN bu
+ * isteğe koymaz — önce fotoğrafı kendi (RLS'ye tabi) private Storage
+ * klasörüne yükler (bkz. lib/storage/mealPhotos.ts, app/meals/add-photo/page.tsx),
+ * sonra yalnızca küçük bir referans (`storage_path`) gönderir. Gerçek
+ * indirme, sunucu tarafında ÇAĞIRANIN kendi oturumuyla (RLS'ye tabi)
+ * yapılır — bkz. app/api/meals/analyze-photo/route.ts.
+ */
 export const photoAnalysisInputSchema = z.object({
-  image_base64: z.string().trim().min(1, "image_base64 boş olamaz"),
-  mime_type: z.enum(ALLOWED_IMAGE_MIME_TYPES),
+  storage_path: z
+    .string()
+    .trim()
+    .min(1, "storage_path boş olamaz")
+    .max(500)
+    // Path traversal'a karşı savunma: TAM olarak iki segment, hiçbiri
+    // "." ile başlamıyor (".." veya gizli dosya adlarını da engeller).
+    .regex(/^[^./][^/]*\/[^./][^/]*$/, "storage_path geçersiz formatta"),
 });
 
 export type PhotoAnalysisInput = z.infer<typeof photoAnalysisInputSchema>;

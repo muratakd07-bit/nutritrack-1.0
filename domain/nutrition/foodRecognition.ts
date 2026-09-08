@@ -48,8 +48,8 @@ export interface FoodRecognitionSource {
 export class FoodRecognitionNotImplementedError extends Error {
   constructor() {
     super(
-      "Fotoğraftan besin tanıma (AI) henüz gerçek bir sağlayıcıya (ör. " +
-        "Qwen3-VL) bağlanmadı. QWEN3_VL_ENDPOINT_URL tanımlı değil. Bu " +
+      "Fotoğraftan besin tanıma (AI) henüz gerçek bir sağlayıcıya (Qwen3-VL) " +
+        "bağlanmadı. QWEN3_VL_BASE_URL/QWEN3_VL_API_KEY tanımlı değil. Bu " +
         "aşamada besin girişi yalnızca doğrulanmış (manuel) food_id + " +
         "consumed_weight_g ile yapılabilir — bkz. types/meal.ts.",
     );
@@ -64,12 +64,13 @@ const notImplementedSource: FoodRecognitionSource = {
 };
 
 /**
- * Varsayılan (production) kaynak: `QWEN3_VL_ENDPOINT_URL` tanımlıysa gerçek
- * Qwen3-VL istemcisini, değilse bilinçli olarak `FoodRecognitionNotImplementedError`
- * fırlatan bir stub'ı kullanır — ADIM 16/25'teki "gerçek kaynak yoksa
- * sessizce uydurma üretme" desenini birebir tekrarlar.
+ * Varsayılan (production) kaynak: `QWEN3_VL_BASE_URL` VE `QWEN3_VL_API_KEY`
+ * tanımlıysa gerçek Qwen3-VL istemcisini, değilse bilinçli olarak
+ * `FoodRecognitionNotImplementedError` fırlatan bir stub'ı kullanır — ADIM
+ * 16/25'teki "gerçek kaynak yoksa sessizce uydurma üretme" desenini birebir
+ * tekrarlar.
  */
-export const foodRecognitionSource: FoodRecognitionSource = process.env
-  .QWEN3_VL_ENDPOINT_URL
-  ? new Qwen3VLFoodRecognitionSource()
-  : notImplementedSource;
+export const foodRecognitionSource: FoodRecognitionSource =
+  process.env.QWEN3_VL_BASE_URL && process.env.QWEN3_VL_API_KEY
+    ? new Qwen3VLFoodRecognitionSource()
+    : notImplementedSource;

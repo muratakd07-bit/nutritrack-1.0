@@ -80,7 +80,9 @@ describe.skipIf(!RUN)(
         name: `ADIM16 itest ${testRunId} ${nameSuffix}`,
         facts,
         source: "TEST_FIXTURE",
-        sourceRef: testRunId,
+        // ADIM 26'da (source, sourceRef) üzerine eklenen @@unique kısıtı
+        // nedeniyle her test food'u için FARKLI bir sourceRef gerekir.
+        sourceRef: `${testRunId}-${nameSuffix}`,
       });
       cleanupFoodIds.push(food.id);
       return food;

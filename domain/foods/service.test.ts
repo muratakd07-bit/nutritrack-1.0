@@ -8,6 +8,10 @@ vi.mock("./repository", () => ({
     createFood: (...args: unknown[]) => mockCreateFood(...args),
     upsertNutritionFacts: (...args: unknown[]) =>
       mockUpsertNutritionFacts(...args),
+    // Gerçek transaction yok — callback'i doğrudan çalıştırır (testte
+    // önemli olan atomiklik değil, createFood/upsertNutritionFacts'in
+    // doğru argümanlarla çağrıldığıdır).
+    runInTransaction: (fn: (tx: unknown) => Promise<unknown>) => fn({}),
   },
 }));
 
@@ -36,11 +40,12 @@ describe("createVerifiedFood", () => {
       sourceRef: "12345",
     });
 
-    expect(mockCreateFood).toHaveBeenCalledWith("Test Food");
+    expect(mockCreateFood).toHaveBeenCalledWith("Test Food", expect.anything());
     expect(mockUpsertNutritionFacts).toHaveBeenCalledWith(
       "food-1",
       sampleFacts,
       { source: "USDA_FDC", sourceRef: "12345" },
+      expect.anything(),
     );
     expect(food).toEqual({ id: "food-1", name: "Test Food" });
   });

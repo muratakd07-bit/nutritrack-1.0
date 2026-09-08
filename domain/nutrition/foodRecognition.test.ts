@@ -5,8 +5,9 @@ import {
 } from "./foodRecognition";
 
 describe("foodRecognitionSource (varsayılan/production implementasyon)", () => {
-  it("QWEN3_VL_ENDPOINT_URL tanımlı olmadığı için NotImplementedError fırlatır", async () => {
-    expect(process.env.QWEN3_VL_ENDPOINT_URL).toBeUndefined();
+  it("QWEN3_VL_BASE_URL/QWEN3_VL_API_KEY tanımlı olmadığı için NotImplementedError fırlatır", async () => {
+    expect(process.env.QWEN3_VL_BASE_URL).toBeUndefined();
+    expect(process.env.QWEN3_VL_API_KEY).toBeUndefined();
     await expect(
       foodRecognitionSource.recognizeFood({
         image_base64: "test-image-data",

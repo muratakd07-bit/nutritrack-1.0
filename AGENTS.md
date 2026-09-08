@@ -55,13 +55,22 @@ duplicate/merge stratejisi ve DEMO_KEY rate limit gerçeği:
 kontrollü USDA fallback+otomatik import), `app/api/meals/analyze-photo/route.ts`
 (kimlik doğrulama + kullanıcı-başı rate limit + upload validasyonu + AI
 çıktı doğrulaması; HİÇBİR MealItem OLUŞTURMAZ — stateless öneri döner).
-`domain/nutrition/qwen3vlClient.ts` yazıldı ama gerçek bir Qwen3-VL
-endpoint'ine karşı DOĞRULANAMADI (henüz bağlı değil) — bu yüzden
-"production-ready" değildir; `QWEN3_VL_ENDPOINT_URL` tanımlı değilse
-501 döner. Test/geliştirme için `AI_FOOD_RECOGNITION_MODE=mock`
-(`domain/nutrition/foodRecognitionMock.ts`, deterministik) kullanılabilir
-— production'da ASLA açık bırakılmamalı. Detaylar:
-[`domain/nutrition/README.md`](domain/nutrition/README.md).
+`domain/nutrition/qwen3vlClient.ts`, Alibaba Cloud Model Studio'nun
+OpenAI-uyumlu formatını hedefler — istek/yanıt ŞEKLİ 2026-09-09'da resmi
+dokümantasyondan canlı doğrulandı (USDA ile aynı titizlik), ama gerçek
+bir API key olmadığı için CANLI ÇAĞRI test edilemedi — bu yüzden
+"production-ready" değildir. `QWEN3_VL_BASE_URL`/`QWEN3_VL_API_KEY`
+tanımlı değilse 501 döner. Test/geliştirme için
+`AI_FOOD_RECOGNITION_MODE=mock` (`domain/nutrition/foodRecognitionMock.ts`,
+deterministik) kullanılabilir — production'da ASLA açık bırakılmamalı.
+
+**Fotoğraf saklama:** İstemci fotoğrafı DOĞRUDAN kendi private Storage
+klasörüne (`meal-photos/{userId}/...`, bkz. `supabase/storage-setup.sql`
+— gerçek bir Supabase projesine RLS+auth-triggers.sql gibi ayrıca
+uygulanır) yükler; API'ye yalnızca küçük bir `storage_path` referansı
+gider, büyük base64 payload GİTMEZ. Hiçbir kalıcı/genel URL üretilmez.
+
+Detaylar: [`domain/nutrition/README.md`](domain/nutrition/README.md).
 
 ## Katmanlar
 

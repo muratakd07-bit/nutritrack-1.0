@@ -5,26 +5,33 @@ import {
 } from "./foodRecognition";
 
 describe("photoAnalysisInputSchema", () => {
-  it("geçerli bir isteği kabul eder", () => {
+  it("geçerli bir storage_path'i kabul eder", () => {
     const result = photoAnalysisInputSchema.safeParse({
-      image_base64: "aGVsbG8=",
-      mime_type: "image/jpeg",
+      storage_path: "user-123/photo-abc.jpg",
     });
     expect(result.success).toBe(true);
   });
 
-  it("desteklenmeyen bir mime_type'ı reddeder", () => {
+  it("boş storage_path'i reddeder", () => {
+    const result = photoAnalysisInputSchema.safeParse({ storage_path: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("segment içermeyen (klasörsüz) bir storage_path'i reddeder", () => {
+    const result = photoAnalysisInputSchema.safeParse({ storage_path: "photo.jpg" });
+    expect(result.success).toBe(false);
+  });
+
+  it("path traversal denemesini (fazladan '/' içeren) reddeder", () => {
     const result = photoAnalysisInputSchema.safeParse({
-      image_base64: "aGVsbG8=",
-      mime_type: "application/pdf",
+      storage_path: "user-123/../other-user/photo.jpg",
     });
     expect(result.success).toBe(false);
   });
 
-  it("boş image_base64'ü reddeder", () => {
+  it("aşırı uzun bir storage_path'i reddeder", () => {
     const result = photoAnalysisInputSchema.safeParse({
-      image_base64: "",
-      mime_type: "image/png",
+      storage_path: `user-123/${"a".repeat(600)}.jpg`,
     });
     expect(result.success).toBe(false);
   });
