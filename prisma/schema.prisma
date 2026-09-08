@@ -37,6 +37,16 @@ enum GoalSetBy {
   TRAINER
 }
 
+/// Yetkilendirme (authorization) rolü — TEK kaynağı bu alandır.
+/// `system/service` bir rol DEĞİLDİR: server-side kod/servis bağlantısı
+/// üzerinden çalışır, hiçbir zaman bir User.role değeriyle temsil edilmez
+/// (bkz. domain/authz/README.md).
+enum UserRole {
+  USER
+  TRAINER
+  ADMIN
+}
+
 /// Uygulama kullanıcı profili.
 /// `id`, Supabase Auth tarafındaki `auth.users.id` (uuid) ile birebir aynı
 /// değeri taşır (profil satırı, kullanıcı ilk giriş yaptığında uygulama
@@ -48,6 +58,10 @@ model User {
   id          String   @id
   email       String   @unique
   displayName String?
+  /// Yetkilendirme rolü. Client tarafından ASLA belirlenemez/gönderilemez —
+  /// yalnızca burada, veritabanında tutulur ve sunucu tarafında okunur
+  /// (bkz. domain/authz/service.ts). Varsayılan: USER (en düşük yetki).
+  role        UserRole @default(USER)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

@@ -1,5 +1,6 @@
 import type { DailyNutritionGoal } from "@prisma/client";
 import { goalsRepository } from "./repository";
+import { resolveAssignedTrainerId } from "@/domain/authz/service";
 import type { DailyNutritionGoals } from "@/types/goals";
 
 /**
@@ -7,10 +8,15 @@ import type { DailyNutritionGoals } from "@/types/goals";
  * modüllerinin bu tipten bir değer üretip `setGoalsForUser`'ı çağırması
  * mimari olarak YASAKTIR — coach modülleri yalnızca
  * `getCurrentGoalsForUser`'ı import etmelidir (bkz. domain/coach/README.md).
+ *
+ * `trainerUserId`: trainer'ın kendi (Supabase auth) kullanıcı kimliği —
+ * `Trainer.id` (profil id'si) DEĞİL. Atama kontrolü ve Trainer.id çözümü
+ * burada, `domain/authz/service.ts` → `resolveAssignedTrainerId` üzerinden
+ * TEK bir yerden yapılır (bkz. ADIM 24, domain/authz/README.md).
  */
 export type GoalWriteActor =
   | { type: "SYSTEM" }
-  | { type: "TRAINER"; trainerId: string };
+  | { type: "TRAINER"; trainerUserId: string };
 
 export class UnauthorizedGoalWriteError extends Error {
   constructor(message: string) {
@@ -36,22 +42,25 @@ export async function setGoalsForUser(
   goals: DailyNutritionGoals,
   actor: GoalWriteActor,
 ): Promise<DailyNutritionGoal> {
+  let setByTrainerId: string | null = null;
+
   if (actor.type === "TRAINER") {
-    const isAssigned = await goalsRepository.isTrainerAssignedToUser(
-      actor.trainerId,
+    const trainerId = await resolveAssignedTrainerId(
+      actor.trainerUserId,
       userId,
     );
-    if (!isAssigned) {
+    if (!trainerId) {
       throw new UnauthorizedGoalWriteError(
-        `Trainer ${actor.trainerId}, kullanıcı ${userId} için hedef belirleme yetkisine sahip değil.`,
+        `Trainer ${actor.trainerUserId}, kullanıcı ${userId} için hedef belirleme yetkisine sahip değil.`,
       );
     }
+    setByTrainerId = trainerId;
   }
 
   return goalsRepository.createForUser({
     ...goals,
     userId,
     setBy: actor.type,
-    setByTrainerId: actor.type === "TRAINER" ? actor.trainerId : null,
+    setByTrainerId,
   });
 }

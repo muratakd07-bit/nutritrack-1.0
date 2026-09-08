@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getAuthenticatedUserId } from "@/lib/auth/session";
+import { mapAuthErrorToResponse, requireUserId } from "@/lib/authz/guard";
+import { requireAccessToUserData } from "@/domain/authz/service";
 import { mealItemInputSchema } from "@/lib/validation/meal";
 import {
   createMealItemForUser,
@@ -16,55 +17,82 @@ import { IdempotencyKeyConflictError } from "@/domain/meal/repository";
  * sözleşmesini çağırır. ADIM 16 henüz bağlanmadığı için bu uç nokta şu an
  * 501 (Not Implemented) döner — bu, mimari sınırın doğru çalıştığının
  * kanıtıdır, bir hata değildir.
+ *
+ * Not: POST her zaman ÇAĞIRANIN kendi hesabına yazar (başka bir kullanıcı
+ * adına meal item oluşturma yetkisi kimseye — trainer'a bile — verilmez).
  */
 export async function POST(request: Request) {
-  const userId = await getAuthenticatedUserId();
-  if (!userId) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-
-  let body: unknown;
   try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
-  }
+    const userId = await requireUserId();
 
-  const parsed = mealItemInputSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "validation_error", issues: parsed.error.issues },
-      { status: 400 },
-    );
-  }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+    }
 
-  try {
-    const mealItem = await createMealItemForUser(userId, parsed.data);
-    return NextResponse.json({ data: mealItem }, { status: 201 });
+    const parsed = mealItemInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "validation_error", issues: parsed.error.issues },
+        { status: 400 },
+      );
+    }
+
+    try {
+      const mealItem = await createMealItemForUser(userId, parsed.data);
+      return NextResponse.json({ data: mealItem }, { status: 201 });
+    } catch (error) {
+      if (error instanceof NutritionSourceNotImplementedError) {
+        return NextResponse.json(
+          {
+            error: "nutrition_source_not_implemented",
+            message: error.message,
+          },
+          { status: 501 },
+        );
+      }
+      if (error instanceof IdempotencyKeyConflictError) {
+        return NextResponse.json(
+          { error: "idempotency_conflict", message: error.message },
+          { status: 409 },
+        );
+      }
+      throw error;
+    }
   } catch (error) {
-    if (error instanceof NutritionSourceNotImplementedError) {
-      return NextResponse.json(
-        { error: "nutrition_source_not_implemented", message: error.message },
-        { status: 501 },
-      );
-    }
-    if (error instanceof IdempotencyKeyConflictError) {
-      return NextResponse.json(
-        { error: "idempotency_conflict", message: error.message },
-        { status: 409 },
-      );
-    }
+    const mapped = mapAuthErrorToResponse(error);
+    if (mapped) return mapped;
     throw error;
   }
 }
 
-/** GET /api/meals — yalnızca çağıran kullanıcının kendi meal item'larını listeler. */
-export async function GET() {
-  const userId = await getAuthenticatedUserId();
-  if (!userId) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+/**
+ * GET /api/meals[?user_id=<id>] — meal item'ları listeler.
+ *
+ * `user_id` verilmezse çağıranın kendi verisi döner. Başka bir `user_id`
+ * istenirse, çağıranın o kullanıcının verisine erişip erişemeyeceği
+ * `domain/authz/service.ts` → `requireAccessToUserData` ile denetlenir
+ * (kendi verisi: her zaman izinli; ADMIN: her zaman izinli; TRAINER: yalnızca
+ * atanmış client'lar için izinli; aksi halde 403).
+ */
+export async function GET(request: Request) {
+  try {
+    const actorId = await requireUserId();
 
-  const items = await listMealItemsForUser(userId);
-  return NextResponse.json({ data: items });
+    const { searchParams } = new URL(request.url);
+    const targetUserId = searchParams.get("user_id") ?? actorId;
+
+    if (targetUserId !== actorId) {
+      await requireAccessToUserData(actorId, targetUserId);
+    }
+
+    const items = await listMealItemsForUser(targetUserId);
+    return NextResponse.json({ data: items });
+  } catch (error) {
+    const mapped = mapAuthErrorToResponse(error);
+    if (mapped) return mapped;
+    throw error;
+  }
 }

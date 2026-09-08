@@ -61,3 +61,90 @@ create policy "daily_nutrition_goals_owner_read"
   on "daily_nutrition_goals"
   for select
   using ("userId" = auth.uid()::text);
+
+-- ============================================================================
+-- ADIM 24 — Rol tabanlı erişim (RBAC), DB seviyesinde savunma katmanı.
+--
+-- Next.js API'miz bugün Prisma/postgres bağlantısıyla RLS'yi zaten bypass
+-- ediyor; asıl yetki kontrolü domain/authz/service.ts'te yapılıyor. Aşağıdaki
+-- politikalar, gelecekte bir istemcinin (mobil uygulama gibi) Supabase'e
+-- DOĞRUDAN bağlanma ihtimaline karşı AYNI rol modelini veritabanı
+-- seviyesinde de uygular (defense in depth) — uygulama katmanının yerini
+-- almaz, onu yedekler.
+-- ============================================================================
+
+-- Rol/atama kontrollerini tekrarlamamak için iki yardımcı fonksiyon.
+-- `security definer`: çağıran rolün (authenticated/anon) public.users veya
+-- public.trainer_assignments üzerinde doğrudan SELECT yetkisi olmasa da bu
+-- fonksiyonlar çalışabilir — yalnızca içeride tanımlı, sabit sorguyu çalıştırırlar.
+create or replace function public.current_user_role()
+returns text
+language sql
+stable
+security definer set search_path = public
+as $$
+  select role::text from public.users where id = auth.uid()::text;
+$$;
+
+create or replace function public.is_assigned_trainer_of(target_user_id text)
+returns boolean
+language sql
+stable
+security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.trainer_assignments ta
+    join public.trainers t on t.id = ta."trainerId"
+    where t."userId" = auth.uid()::text
+      and ta."clientUserId" = target_user_id
+  );
+$$;
+
+grant execute on function public.current_user_role() to authenticated;
+grant execute on function public.is_assigned_trainer_of(text) to authenticated;
+
+-- ADMIN: her tabloda tam erişim.
+drop policy if exists "meals_admin_full_access" on "meals";
+create policy "meals_admin_full_access"
+  on "meals"
+  for all
+  using (public.current_user_role() = 'ADMIN')
+  with check (public.current_user_role() = 'ADMIN');
+
+drop policy if exists "meal_items_admin_full_access" on "meal_items";
+create policy "meal_items_admin_full_access"
+  on "meal_items"
+  for all
+  using (public.current_user_role() = 'ADMIN')
+  with check (public.current_user_role() = 'ADMIN');
+
+drop policy if exists "daily_nutrition_goals_admin_full_access" on "daily_nutrition_goals";
+create policy "daily_nutrition_goals_admin_full_access"
+  on "daily_nutrition_goals"
+  for all
+  using (public.current_user_role() = 'ADMIN')
+  with check (public.current_user_role() = 'ADMIN');
+
+-- TRAINER: yalnızca kendisine ATANMIŞ client'ların meal/meal_item verisini
+-- OKUYABİLİR (yazamaz — öğünü her zaman kullanıcının kendisi girer).
+drop policy if exists "meals_trainer_read_assigned" on "meals";
+create policy "meals_trainer_read_assigned"
+  on "meals"
+  for select
+  using (public.is_assigned_trainer_of("userId"));
+
+drop policy if exists "meal_items_trainer_read_assigned" on "meal_items";
+create policy "meal_items_trainer_read_assigned"
+  on "meal_items"
+  for select
+  using (public.is_assigned_trainer_of("userId"));
+
+-- TRAINER: yalnızca kendisine ATANMIŞ client'lar için hedef OKUYABİLİR VE
+-- YAZABİLİR (uygulama kuralı: hedefleri yalnızca trainer/system yazabilir).
+drop policy if exists "daily_nutrition_goals_trainer_access" on "daily_nutrition_goals";
+create policy "daily_nutrition_goals_trainer_access"
+  on "daily_nutrition_goals"
+  for all
+  using (public.is_assigned_trainer_of("userId"))
+  with check (public.is_assigned_trainer_of("userId"));

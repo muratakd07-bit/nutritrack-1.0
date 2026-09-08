@@ -31,16 +31,4 @@ export const goalsRepository = {
       },
     });
   },
-
-  async isTrainerAssignedToUser(
-    trainerId: string,
-    userId: string,
-  ): Promise<boolean> {
-    const assignment = await prisma.trainerAssignment.findUnique({
-      where: {
-        trainerId_clientUserId: { trainerId, clientUserId: userId },
-      },
-    });
-    return assignment !== null;
-  },
 };

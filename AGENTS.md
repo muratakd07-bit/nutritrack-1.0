@@ -72,3 +72,14 @@ uydurma bir değerle "çalışıyormuş gibi" davranılmaz.
   `supabase/auth-triggers.sql` (auth.users → public.users trigger'ı) ile
   otomatik oluşturulur — bu dosya da RLS gibi Prisma migration akışının
   parçası değildir, ayrıca uygulanması gerekir.
+- **RBAC (ADIM 24):** Roller `USER`/`TRAINER`/`ADMIN` — TEK kaynağı
+  `User.role` (veritabanı). `system/service` bir rol DEĞİLDİR; server-side
+  kodun kendisidir, hiçbir API'den tetiklenmez. Authorization mantığı
+  `domain/authz/` içinde toplanır (authentication'dan — `lib/auth/` —
+  kesin olarak ayrı). API route'ları `lib/authz/guard.ts` →
+  `requireUserId()`/`mapAuthErrorToResponse()` ile 401/403'ü tek yerden
+  yönetir. Yeni bir kullanıcıyı TRAINER/ADMIN yapmak (rol atamak) hiçbir
+  API'den yapılamaz — kasıtlı olarak operasyonel/DB-seviyesi bir adımdır.
+  RLS de aynı rol modelini DB seviyesinde tekrarlar (defense in depth) —
+  bkz. `supabase/rls-policies.sql`, `public.current_user_role()` ve
+  `public.is_assigned_trainer_of()`.
