@@ -49,6 +49,20 @@ CLI'ı, `USDA_FDC_API_KEY` env değişkeni). Alan eşlemesi, provenance,
 duplicate/merge stratejisi ve DEMO_KEY rate limit gerçeği:
 [`domain/foods/README.md`](domain/foods/README.md).
 
+**ADIM 27 güncellemesi:** Fotoğraftan besin tanıma akışı eklendi —
+`domain/nutrition/photoAnalysis.ts` (orkestrasyon), `domain/foods/foodMatcher.ts`
+(AI'nin isimlerini gerçek food_id'lere eşler: önce yerel DB, sonra
+kontrollü USDA fallback+otomatik import), `app/api/meals/analyze-photo/route.ts`
+(kimlik doğrulama + kullanıcı-başı rate limit + upload validasyonu + AI
+çıktı doğrulaması; HİÇBİR MealItem OLUŞTURMAZ — stateless öneri döner).
+`domain/nutrition/qwen3vlClient.ts` yazıldı ama gerçek bir Qwen3-VL
+endpoint'ine karşı DOĞRULANAMADI (henüz bağlı değil) — bu yüzden
+"production-ready" değildir; `QWEN3_VL_ENDPOINT_URL` tanımlı değilse
+501 döner. Test/geliştirme için `AI_FOOD_RECOGNITION_MODE=mock`
+(`domain/nutrition/foodRecognitionMock.ts`, deterministik) kullanılabilir
+— production'da ASLA açık bırakılmamalı. Detaylar:
+[`domain/nutrition/README.md`](domain/nutrition/README.md).
+
 ## Katmanlar
 
 - `app/` — UI (App Router). `app/api/**/route.ts` — API/backend.

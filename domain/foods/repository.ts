@@ -105,4 +105,31 @@ export const foodsRepository = {
   ): Promise<T> {
     return prisma.$transaction(fn);
   },
+
+  /**
+   * Verilen kelimelerden EN AZ BİRİNİ adında geçiren, VE gerçekten
+   * doğrulanmış besin değeri OLAN food'ları döner (bkz.
+   * domain/foods/foodMatcher.ts). Facts'i olmayan bir Food, ADIM 16
+   * çağrıldığında zaten hata verir — bu yüzden aday olarak hiç sunulmaz.
+   */
+  async searchByNameWords(
+    words: string[],
+    limit = 20,
+    db: Db = prisma,
+  ): Promise<Food[]> {
+    if (words.length === 0) return [];
+    return db.food.findMany({
+      where: {
+        AND: [
+          { nutritionFacts: { isNot: null } },
+          {
+            OR: words.map((word) => ({
+              name: { contains: word, mode: "insensitive" as const },
+            })),
+          },
+        ],
+      },
+      take: limit,
+    });
+  },
 };

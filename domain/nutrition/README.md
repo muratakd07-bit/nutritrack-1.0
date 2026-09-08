@@ -44,17 +44,37 @@ ADMIN rolü tarafından [`domain/foods/service.ts`](../foods/service.ts) →
 `app/api/admin/foods/route.ts`. Otomatik kod (Claude dahil) bir besinin
 gerçek kalori/makro değerini asla kendisi üretip bu tabloya yazmaz.
 
-## AI (fotoğraftan besin tanıma) — ayrı ve hâlâ bağlı değil
+## AI (fotoğraftan besin tanıma) — ADIM 27, hâlâ ayrı, gerçek vendor'a bağlı değil
 
 [`foodRecognition.ts`](./foodRecognition.ts), `contract.ts`'ten BİLİNÇLİ
-OLARAK ayrı bir sözleşmedir. Bir görsel tanıma sağlayıcısı (vendor/model)
-henüz bağlanmadı; varsayılan implementasyon
-`FoodRecognitionNotImplementedError` fırlatır.
+OLARAK ayrı bir sözleşmedir. `QWEN3_VL_ENDPOINT_URL` tanımlı değilse
+varsayılan implementasyon `FoodRecognitionNotImplementedError` fırlatır —
+[`qwen3vlClient.ts`](./qwen3vlClient.ts) yazıldı ama **gerçek bir Qwen3-VL
+endpoint'ine karşı canlı doğrulanamadı** (USDA entegrasyonunun aksine —
+bkz. dosyanın kendi üstündeki not). Bu yüzden bu entegrasyon
+"production-ready" DEĞİLDİR.
 
-**Kritik ayrım:** `FoodRecognitionEstimate.estimated_weight_g` (AI tahmini,
-doğrulanmamış) hiçbir zaman doğrudan `getCalculatedNutrition`'a girmez.
-Kullanıcı tahmini onaylayıp/düzeltip bir `MealItemInput.consumed_weight_g`
-(doğrulanmış) haline getirmeden hesaplama tetiklenmez.
+Akış (ADIM 27): fotoğraf → [`foodRecognition.ts`](./foodRecognition.ts)
+(aday İSİMLER + tahmini ağırlık + görsel açıklama, food_id DEĞİL) →
+şema doğrulaması (bkz. `lib/validation/foodRecognition.ts` — confidence
+[0,1]'e, ağırlık gerçekçi bir üst sınıra sıkıştırılır; bu, manipüle
+edilmiş/"prompt injection" içeren bir görselin saçma bir değeri modele
+"söyletmesine" karşı savunmadır) → [`domain/foods/foodMatcher.ts`](../foods/foodMatcher.ts)
+(isimden GERÇEK food_id'ye eşleme: önce yerel DB, gerekiyorsa kontrollü
+USDA fallback + otomatik import) → [`photoAnalysis.ts`](./photoAnalysis.ts)
+(orkestrasyon + belirsizlik/düşük-güven tespiti) → **KULLANICI ONAYI** →
+`MealItemInput` → `domain/meal/service.ts` (DEĞİŞMEDİ) →
+`contract.ts` (bu dosya, DEĞİŞMEDİ).
+
+**Kritik ayrım (değişmedi, şimdi daha somut):** `PhotoAnalysisResult`'ın
+hiçbir alanı (`estimated_weight_g` dahil) `MealItemInput`'un gerektirdiği
+alanlarla (`food_id`, `consumed_weight_g`, `meal_type`) AYNI ŞEKİLDE
+adlandırılmamıştır — bu, kullanıcı seçim/düzeltme yapmadan bir analiz
+sonucunun yanlışlıkla doğrudan meal item'a "sızmasını" tip sistemi
+seviyesinde de zorlaştırır. `app/api/meals/analyze-photo/route.ts` HİÇBİR
+MealItem oluşturmaz — yalnızca öneri döner (stateless, sunucuda
+saklanmaz). Onay, istemcinin AYNI, değişmemiş `POST /api/meals`'e normal
+bir `MealItemInput` göndermesiyle olur.
 
 ## Snapshot değişmezliği
 

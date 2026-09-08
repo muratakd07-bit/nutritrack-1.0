@@ -240,12 +240,12 @@ export default function Home() {
               </p>
             </div>
 
-            <button
-              type="button"
+            <Link
+              href="/meals/add-photo"
               className="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
             >
               + Öğün Ekle
-            </button>
+            </Link>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
