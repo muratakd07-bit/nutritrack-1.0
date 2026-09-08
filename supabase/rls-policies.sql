@@ -18,18 +18,25 @@ alter table "meals" enable row level security;
 alter table "meal_items" enable row level security;
 alter table "daily_nutrition_goals" enable row level security;
 
+-- ÖNEMLİ: Prisma şemasındaki alanlar camelCase (userId) ve hiçbir field'da
+-- @map("...") kullanılmıyor. Bu nedenle Prisma'nın oluşturduğu gerçek Postgres
+-- sütunu "userId" (tırnaklı, camelCase) olur — "user_id" (snake_case) DEĞİL.
+-- Postgres'te tırnaksız tanımlayıcılar küçük harfe çevrildiği için burada
+-- sütun adı MUTLAKA çift tırnakla ("userId") yazılmalı, aksi halde
+-- "column user_id does not exist" hatası alınır.
+
 -- Kullanıcı yalnızca kendi meal/meal_item/goal kayıtlarını görebilir ve yazabilir.
 create policy "meals_owner_isolation"
   on "meals"
   for all
-  using (user_id = auth.uid()::text)
-  with check (user_id = auth.uid()::text);
+  using ("userId" = auth.uid()::text)
+  with check ("userId" = auth.uid()::text);
 
 create policy "meal_items_owner_isolation"
   on "meal_items"
   for all
-  using (user_id = auth.uid()::text)
-  with check (user_id = auth.uid()::text);
+  using ("userId" = auth.uid()::text)
+  with check ("userId" = auth.uid()::text);
 
 -- Hedefler için: kullanıcı kendi hedeflerini OKUYABİLİR ama YAZAMAZ.
 -- Yazma (INSERT/UPDATE) yalnızca uygulamanın service-role bağlantısı
@@ -37,4 +44,4 @@ create policy "meal_items_owner_isolation"
 create policy "daily_nutrition_goals_owner_read"
   on "daily_nutrition_goals"
   for select
-  using (user_id = auth.uid()::text);
+  using ("userId" = auth.uid()::text);
