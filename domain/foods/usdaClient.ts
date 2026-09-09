@@ -25,6 +25,29 @@ function getApiKey(): string {
 }
 
 /**
+ * fetch'i ÇAĞIRAN taraf (DNS/bağlantı/timeout gibi ağ seviyesi hatalarda
+ * fetch bir TypeError/DOMException fırlatır, HTTP durum kodu İÇERMEZ) bunu
+ * her zaman `UsdaApiError`'a çevirir. Bu, `domain/foods/foodMatcher.ts` →
+ * `tryUsdaFallback`'in yalnızca `UsdaApiError`'ı yakalayıp "USDA şu an
+ * kullanılamıyor, akışı bozma" şeklinde davranmasını sağlar — ADIM 27'nin
+ * canlı testinde gerçekten gözlemlenen bir hata: USDA'ya ağ seviyesinde
+ * ulaşılamadığında (ör. DNS/bağlantı zaman aşımı) bu sarmalama OLMADAN
+ * hata `matchLabelToFoods`'un dışına, tüm fotoğraf analizi isteğini
+ * çökertecek şekilde sızıyordu.
+ */
+async function fetchUsda(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    throw new UsdaApiError(
+      `USDA FDC API'ye ağ seviyesinde ulaşılamadı: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+/**
  * Birden fazla fdcId'yi TEK bir istekte çeker (rate limit'i korumak için
  * `/food/{id}` yerine bulk `/foods` uç noktası kullanılır).
  */
@@ -32,7 +55,7 @@ export async function getUsdaFoodsByIds(fdcIds: number[]): Promise<UsdaFood[]> {
   if (fdcIds.length === 0) return [];
 
   const apiKey = getApiKey();
-  const response = await fetch(`${USDA_API_BASE}/foods?api_key=${apiKey}`, {
+  const response = await fetchUsda(`${USDA_API_BASE}/foods?api_key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ fdcIds }),
@@ -61,7 +84,7 @@ export async function searchUsdaFoods(
   pageSize = 25,
 ): Promise<{ fdcId: number; description: string }[]> {
   const apiKey = getApiKey();
-  const response = await fetch(`${USDA_API_BASE}/foods/search?api_key=${apiKey}`, {
+  const response = await fetchUsda(`${USDA_API_BASE}/foods/search?api_key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, dataType, pageSize }),

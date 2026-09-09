@@ -28,9 +28,46 @@
  * doğrular (sessizce atlamaz).
  */
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { deflateSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { roundToOneDecimal } from "./calculation";
+
+const MIME_BY_EXT: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+};
+
+/**
+ * Gerçek bir yemek fotoğrafıyla test etmek için, o fotoğrafın YEREL bir
+ * dosya yolunu `QWEN3_VL_LIVE_TEST_PHOTO_PATH` ortam değişkeniyle ver.
+ * Verilmezse, sentetik (gerçek olmayan) bir test görseline düşülür — bu
+ * hiçbir zaman "gerçek bir yemek fotoğrafıyla test edildi" gibi
+ * sunulmaz, `isReal: false` ile açıkça işaretlenir ve konsola loglanır.
+ */
+async function loadTestImage(): Promise<{
+  base64: string;
+  mimeType: string;
+  isReal: boolean;
+}> {
+  const realPhotoPath = process.env.QWEN3_VL_LIVE_TEST_PHOTO_PATH;
+  if (realPhotoPath) {
+    const buf = await readFile(realPhotoPath);
+    const ext = path.extname(realPhotoPath).toLowerCase();
+    const mimeType = MIME_BY_EXT[ext] ?? "image/jpeg";
+    console.log(
+      `[qwen3vl-live] GERÇEK fotoğraf kullanılıyor: ${realPhotoPath} (${buf.length} byte, ${mimeType})`,
+    );
+    return { base64: buf.toString("base64"), mimeType, isReal: true };
+  }
+  console.log(
+    "[qwen3vl-live] QWEN3_VL_LIVE_TEST_PHOTO_PATH verilmedi — SENTETİK (gerçek olmayan) test görseli kullanılıyor.",
+  );
+  return { ...buildSyntheticTestImage(), isReal: false };
+}
 
 const RUN_DB = process.env.RUN_DB_INTEGRATION_TESTS === "1";
 const HAS_QWEN_CREDS = Boolean(
@@ -142,44 +179,51 @@ describe.skipIf(!RUN_DB || !HAS_QWEN_CREDS)(
       }
     });
 
-    it("gerçek Qwen3-VL çağrısı yapılır, HTTP başarılı döner, yanıt zod şemasından geçer, nutrition alanı ÜRETMEZ", async () => {
-      const image = buildSyntheticTestImage();
-      const startedAt = Date.now();
+    it(
+      "gerçek Qwen3-VL çağrısı yapılır, HTTP başarılı döner, yanıt zod şemasından geçer, nutrition alanı ÜRETMEZ",
+      async () => {
+        const image = await loadTestImage();
+        const startedAt = Date.now();
 
-      // Not: recognitionSource kasıtlı olarak override EDİLMİYOR — burada
-      // domain/nutrition/foodRecognition.ts'in gerçek varsayılan seçimi
-      // (env değişkenleri mevcut olduğu için Qwen3VLFoodRecognitionSource)
-      // kullanılıyor. Herhangi bir hata (ağ, 4xx/5xx, malformed response,
-      // zod validation) burada YAKALANMADAN fırlatılır — test bunu
-      // olduğu gibi raporlar, mock'a düşmez.
-      liveAnalysis = await analyzeFoodPhoto({
-        image_base64: image.base64,
-        mime_type: image.mimeType,
-      });
+        // Not: recognitionSource kasıtlı olarak override EDİLMİYOR — burada
+        // domain/nutrition/foodRecognition.ts'in gerçek varsayılan seçimi
+        // (env değişkenleri mevcut olduğu için Qwen3VLFoodRecognitionSource)
+        // kullanılıyor. Herhangi bir hata (ağ, 4xx/5xx, malformed response,
+        // zod validation) burada YAKALANMADAN fırlatılır — test bunu
+        // olduğu gibi raporlar, mock'a düşmez.
+        liveAnalysis = await analyzeFoodPhoto({
+          image_base64: image.base64,
+          mime_type: image.mimeType,
+        });
 
-      const latencyMs = Date.now() - startedAt;
-      expect(latencyMs).toBeGreaterThan(0);
+        const latencyMs = Date.now() - startedAt;
+        console.log(`[qwen3vl-live] latencyMs=${latencyMs}`);
+        expect(latencyMs).toBeGreaterThan(0);
 
-      // AI çıktısında nutrition alanı OLAMAZ (tip seviyesinde zaten yok —
-      // FoodRecognitionRawResult/PhotoAnalysisResult'ta energy/protein/
-      // fat/carbohydrates/fiber alanı tanımlı değildir; burada ayrıca
-      // çalışma zamanında da doğruluyoruz).
-      for (const forbiddenKey of [
-        "energy_kcal",
-        "protein_g",
-        "fat_g",
-        "carbohydrates_g",
-        "fiber_g",
-      ]) {
-        expect(liveAnalysis).not.toHaveProperty(forbiddenKey);
-      }
+        // AI çıktısında nutrition alanı OLAMAZ (tip seviyesinde zaten yok —
+        // FoodRecognitionRawResult/PhotoAnalysisResult'ta energy/protein/
+        // fat/carbohydrates/fiber alanı tanımlı değildir; burada ayrıca
+        // çalışma zamanında da doğruluyoruz).
+        for (const forbiddenKey of [
+          "energy_kcal",
+          "protein_g",
+          "fat_g",
+          "carbohydrates_g",
+          "fiber_g",
+        ]) {
+          expect(liveAnalysis).not.toHaveProperty(forbiddenKey);
+        }
 
-      expect(typeof liveAnalysis.estimated_weight_g).toBe("number");
-      expect(typeof liveAnalysis.visual_description).toBe("string");
-      expect(Array.isArray(liveAnalysis.candidates)).toBe(true);
-    });
+        expect(typeof liveAnalysis.estimated_weight_g).toBe("number");
+        expect(typeof liveAnalysis.visual_description).toBe("string");
+        expect(Array.isArray(liveAnalysis.candidates)).toBe(true);
+      },
+      45_000,
+    );
 
-    it("FoodMatcher gerçek DB'ye karşı çalışır; eşleşme varsa gerçek ADIM 16 → MealItem → günlük toplam zinciri tamamlanır", async () => {
+    it(
+      "FoodMatcher gerçek DB'ye karşı çalışır; eşleşme varsa gerçek ADIM 16 → MealItem → günlük toplam zinciri tamamlanır",
+      async () => {
       expect(liveAnalysis).toBeDefined();
 
       if (liveAnalysis.is_unrecognized || liveAnalysis.candidates.length === 0) {
@@ -220,6 +264,8 @@ describe.skipIf(!RUN_DB || !HAS_QWEN_CREDS)(
       const summary = await getDailySummaryForUser(userId, new Date());
       expect(summary.item_count).toBe(1);
       expect(summary.energy_kcal).toBe(expectedKcal);
-    });
+      },
+      45_000,
+    );
   },
 );
