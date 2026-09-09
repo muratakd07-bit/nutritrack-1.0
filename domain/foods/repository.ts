@@ -17,6 +17,21 @@ export interface NutritionFactsProvenance {
 /** Varsayılan client veya bir `$transaction` callback'i içindeki `tx`. */
 type Db = typeof prisma | Prisma.TransactionClient;
 
+/**
+ * ADIM 28'de GERÇEK bir hata olarak bulundu: Prisma'nın varsayılan
+ * interactive transaction timeout'u (5000ms) tek bir food için yeterliydi
+ * (ADIM 26 hep 1 food'la test edildi), ama gerçek bir USDA_FDC_API_KEY ile
+ * `--limit 10` çalıştırıldığında, bir batch içindeki HER food için
+ * ayrı ayrı yapılan DB round-trip'leri (Supabase pooler'ına gerçek ağ
+ * gecikmesiyle) 5 saniyeyi aştı ve `Transaction API error: ... expired
+ * transaction` ile TÜM batch (güvenle) geri alındı. Bu, bir arkaplan
+ * import script'i için (canlı bir kullanıcı isteği DEĞİL) makul bir
+ * güvenlik payı ile yükseltildi — bkz. domain/foods/importUsdaFoods.ts
+ * (BATCH_SIZE küçültüldü + tekrarlayan sorgular batch'lendi).
+ */
+const IMPORT_TRANSACTION_TIMEOUT_MS = 30_000;
+const IMPORT_TRANSACTION_MAX_WAIT_MS = 10_000;
+
 export interface CreateImportRunParams {
   source: string;
   requestedCount: number;
@@ -106,7 +121,28 @@ export const foodsRepository = {
   async runInTransaction<T>(
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
-    return prisma.$transaction(fn);
+    return prisma.$transaction(fn, {
+      timeout: IMPORT_TRANSACTION_TIMEOUT_MS,
+      maxWait: IMPORT_TRANSACTION_MAX_WAIT_MS,
+    });
+  },
+
+  /**
+   * `findFactsBySourceRef`'in TOPLU hali — bir import batch'indeki TÜM
+   * fdcId'lerin daha önce import edilip edilmediğini TEK bir sorguda
+   * kontrol eder (N ayrı round-trip yerine). ADIM 28'de gerçek bir
+   * transaction timeout hatasının kök nedenini gidermek için eklendi.
+   */
+  async findFactsBySourceRefs(
+    source: string,
+    sourceRefs: string[],
+    db: Db = prisma,
+  ): Promise<Map<string, FoodNutritionFacts>> {
+    if (sourceRefs.length === 0) return new Map();
+    const rows = await db.foodNutritionFacts.findMany({
+      where: { source, sourceRef: { in: sourceRefs } },
+    });
+    return new Map(rows.filter((r) => r.sourceRef !== null).map((r) => [r.sourceRef as string, r]));
   },
 
   /**

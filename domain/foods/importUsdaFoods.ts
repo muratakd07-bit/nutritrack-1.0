@@ -4,9 +4,19 @@ import type { UsdaFood } from "./usdaTypes";
 
 export const USDA_SOURCE = "USDA_FDC";
 
-/** Bir batch içinde DB'ye yazılan food sayısı — büyük dataset'lerde tek
- * transaction yerine bu boyutta parçalara bölünür. */
-const BATCH_SIZE = 20;
+/**
+ * Bir batch içinde DB'ye yazılan food sayısı — büyük dataset'lerde tek
+ * transaction yerine bu boyutta parçalara bölünür.
+ *
+ * ADIM 28'DE 20'den 10'a DÜŞÜRÜLDÜ: gerçek bir USDA_FDC_API_KEY ile
+ * `--limit 10` çalıştırıldığında, Supabase pooler'ına gerçek ağ
+ * gecikmesiyle yapılan sıralı DB round-trip'leri Prisma'nın interactive
+ * transaction timeout'unu (bkz. domain/foods/repository.ts →
+ * IMPORT_TRANSACTION_TIMEOUT_MS, bu ADIM'da ayrıca yükseltildi) aşıp
+ * TÜM batch'in geri alınmasına yol açtı. Daha küçük batch + batch'lenmiş
+ * duplicate kontrolü (bkz. aşağıda) birlikte kök nedeni giderir.
+ */
+const BATCH_SIZE = 10;
 
 export type ImportOutcome =
   | "imported"
@@ -90,8 +100,25 @@ export async function importUsdaFoods(
 
   for (const batch of chunk(toProcess, BATCH_SIZE)) {
     await foodsRepository.runInTransaction(async (tx) => {
-      for (const food of batch) {
-        const mapped = mapUsdaFoodToVerifiedFood(food);
+      // Önce TÜM mapping'leri hesapla (saf, ağ/DB gerektirmez), SONRA
+      // geçerli olanların idempotency kontrolünü TEK bir toplu sorguda
+      // yap — batch başına N ayrı round-trip yerine 1 (bkz. yukarıdaki
+      // BATCH_SIZE yorumu, ADIM 28'de gerçek bir timeout hatasının kök
+      // nedeni).
+      const mappedBatch = batch.map((food) => ({
+        food,
+        mapped: mapUsdaFoodToVerifiedFood(food),
+      }));
+      const validSourceRefs = mappedBatch
+        .filter((m): m is typeof m & { mapped: { ok: true } } => m.mapped.ok)
+        .map((m) => (m.mapped as Extract<typeof m.mapped, { ok: true }>).food.sourceRef);
+      const existingByRef = await foodsRepository.findFactsBySourceRefs(
+        USDA_SOURCE,
+        validSourceRefs,
+        tx,
+      );
+
+      for (const { food, mapped } of mappedBatch) {
         if (!mapped.ok) {
           details.push({
             fdcId: food.fdcId,
@@ -103,11 +130,7 @@ export async function importUsdaFoods(
           continue;
         }
 
-        const existing = await foodsRepository.findFactsBySourceRef(
-          USDA_SOURCE,
-          mapped.food.sourceRef,
-          tx,
-        );
+        const existing = existingByRef.get(mapped.food.sourceRef);
         if (existing) {
           details.push({
             fdcId: food.fdcId,

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UsdaFood } from "./usdaTypes";
 
 const mockFindFactsBySourceRef = vi.fn();
+const mockFindFactsBySourceRefs = vi.fn();
 const mockCreateFood = vi.fn();
 const mockUpsertNutritionFacts = vi.fn();
 const mockCreateImportRun = vi.fn();
@@ -11,6 +12,8 @@ vi.mock("./repository", () => ({
   foodsRepository: {
     findFactsBySourceRef: (...args: unknown[]) =>
       mockFindFactsBySourceRef(...args),
+    findFactsBySourceRefs: (...args: unknown[]) =>
+      mockFindFactsBySourceRefs(...args),
     createFood: (...args: unknown[]) => mockCreateFood(...args),
     upsertNutritionFacts: (...args: unknown[]) =>
       mockUpsertNutritionFacts(...args),
@@ -49,6 +52,7 @@ function makeIncompleteFood(fdcId: number, description: string): UsdaFood {
 
 beforeEach(() => {
   mockFindFactsBySourceRef.mockReset();
+  mockFindFactsBySourceRefs.mockReset();
   mockCreateFood.mockReset();
   mockUpsertNutritionFacts.mockReset();
   mockCreateImportRun.mockReset();
@@ -57,6 +61,21 @@ beforeEach(() => {
   // runInTransaction: verilen fonksiyonu doğrudan çalıştır (gerçek tx yok, testte önemli değil).
   mockRunInTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<void>) => fn({}));
   mockFindFactsBySourceRef.mockResolvedValue(null);
+  // findFactsBySourceRefs (toplu): testlerin çoğu tek-ref mock'unu
+  // (mockFindFactsBySourceRef) kurar — bu varsayılan uygulama, gerçek
+  // kodun artık kullandığı toplu API'yi, tek-ref mock'un ÜZERİNDEN
+  // (her ref için bir kez çağırarak) şeffafça karşılar; testlerin
+  // gövdelerini değiştirmeye gerek kalmaz.
+  mockFindFactsBySourceRefs.mockImplementation(
+    async (source: string, sourceRefs: string[]) => {
+      const map = new Map<string, unknown>();
+      for (const ref of sourceRefs) {
+        const result = await mockFindFactsBySourceRef(source, ref);
+        if (result) map.set(ref, result);
+      }
+      return map;
+    },
+  );
   mockCreateFood.mockImplementation(async (name: string) => ({ id: `food-${name}`, name }));
   mockUpsertNutritionFacts.mockResolvedValue({});
   mockCreateImportRun.mockImplementation(async (params: unknown) => ({
@@ -93,9 +112,9 @@ describe("importUsdaFoods", () => {
     const food = makeFood(333, "Test Food");
     await importUsdaFoods([333], [food]);
 
-    expect(mockFindFactsBySourceRef).toHaveBeenCalledWith(
+    expect(mockFindFactsBySourceRefs).toHaveBeenCalledWith(
       USDA_SOURCE,
-      "333",
+      ["333"],
       expect.anything(),
     );
   });
@@ -193,7 +212,23 @@ describe("importUsdaFoods", () => {
 
     await importUsdaFoods(ids, foods);
 
-    // BATCH_SIZE=20 -> 21 kayıt = 2 transaction çağrısı (20 + 1).
-    expect(mockRunInTransaction).toHaveBeenCalledTimes(2);
+    // BATCH_SIZE=10 (ADIM 28'de 20'den düşürüldü) -> 21 kayıt = 3
+    // transaction çağrısı (10 + 10 + 1).
+    expect(mockRunInTransaction).toHaveBeenCalledTimes(3);
+  });
+
+  it("bir batch içindeki idempotency kontrolü TEK bir toplu sorguda yapılır (N ayrı round-trip değil)", async () => {
+    const foods = [makeFood(2001, "A"), makeFood(2002, "B"), makeFood(2003, "C")];
+    await importUsdaFoods(
+      foods.map((f) => f.fdcId),
+      foods,
+    );
+
+    expect(mockFindFactsBySourceRefs).toHaveBeenCalledTimes(1);
+    expect(mockFindFactsBySourceRefs).toHaveBeenCalledWith(
+      USDA_SOURCE,
+      ["2001", "2002", "2003"],
+      expect.anything(),
+    );
   });
 });
