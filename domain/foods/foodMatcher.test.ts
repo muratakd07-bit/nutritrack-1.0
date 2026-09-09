@@ -34,6 +34,7 @@ vi.mock("./importUsdaFoods", () => ({
 
 import { matchLabelToFoods } from "./foodMatcher";
 import { UsdaApiError } from "./usdaClient";
+import { MATCH_CONFIDENCE } from "./foodMatchScoring";
 
 beforeEach(() => {
   mockSearchByNameWords.mockReset();
@@ -94,16 +95,35 @@ describe("matchLabelToFoods — yerel eşleşme", () => {
     expect(mockSearchUsdaFoods).not.toHaveBeenCalled();
   });
 
-  it("kelime eşleşme sayısına göre skorlayıp sıralar", async () => {
+  it("Türkçe/İngilizce eşleşme: 'tavuk' sorgusu yerel DB'yi İngilizce eş anlamlısıyla ('chicken') da arar", async () => {
     mockSearchByNameWords.mockResolvedValue([
-      { id: "partial", name: "Chicken soup" }, // yalnızca "chicken" eşleşir
+      { id: "food-1", name: "Chicken, broiler or fryers, breast, cooked" },
+    ]);
+
+    const result = await matchLabelToFoods("tavuk");
+
+    // Yerel DB araması, "tavuk" YANINDA "chicken" ile de genişletilmiş
+    // olmalı — aksi halde İngilizce isimli hiçbir kayıt asla bulunamaz.
+    const searchedWords = mockSearchByNameWords.mock.calls[0][0] as string[];
+    expect(searchedWords).toContain("tavuk");
+    expect(searchedWords).toContain("chicken");
+    expect(result[0]?.food_id).toBe("food-1");
+    expect(result[0]?.requires_user_confirmation).toBe(false);
+  });
+
+  it("kelime eşleşme sayısına göre skorlayıp sıralar; alakasız/off-type bir aday (soup) elenir", async () => {
+    mockSearchByNameWords.mockResolvedValue([
+      { id: "partial", name: "Chicken soup" }, // "soup" off-type + yalnızca "chicken" eşleşir
       { id: "full", name: "Grilled chicken breast fillet" }, // "grilled"+"chicken"+"breast" eşleşir
     ]);
 
     const result = await matchLabelToFoods("grilled chicken breast");
 
+    // v2: "Chicken soup" off-type ("soup") OLDUĞU için skoru 0'a düşer ve
+    // tamamen elenir — yalnızca gerçek eşleşme kalır.
+    expect(result).toHaveLength(1);
     expect(result[0].food_id).toBe("full");
-    expect(result[0].match_score).toBeGreaterThan(result[1].match_score);
+    expect(result[0].requires_user_confirmation).toBe(false);
   });
 
   it("anlamlı kelime yoksa (çok kısa/stopword) boş dizi döner, hiç sorgu yapmaz", async () => {
@@ -221,20 +241,36 @@ describe("matchLabelToFoods — yerel eşleşme", () => {
     ).toBe(true);
   });
 
-  it("düşük skorlu tek bir yerel eşleşmede requires_user_confirmation=true", async () => {
+  it("düşük skorlu tek bir yerel eşleşmede requires_user_confirmation=true (ve GERÇEKTEN daha iyi bir şey var mı diye USDA'ya bakar)", async () => {
     mockSearchByNameWords.mockResolvedValue([
       { id: "weak", name: "Mixed dish containing chicken, unspecified" },
     ]);
+    mockSearchUsdaFoods.mockResolvedValue([]); // USDA'da da daha iyi bir şey yok
 
     // "grilled chicken breast fillet" kelimelerinden yalnızca "chicken"
-    // geçiyor -> düşük skor.
+    // geçiyor -> düşük skor -> tek/zayıf yerel adayla kalınır.
     const result = await matchLabelToFoods("grilled chicken breast fillet");
-    expect(result[0].match_score).toBeLessThan(0.5);
+    expect(result[0].match_score).toBeLessThan(MATCH_CONFIDENCE.CONFIRMATION_SCORE_THRESHOLD);
     expect(result[0].requires_user_confirmation).toBe(true);
   });
 });
 
 describe("matchLabelToFoods — USDA fallback candidate ranking (ADIM 27 gerçek hata düzeltmesi)", () => {
+  it("Türkçe/İngilizce eşleşme: yerelde hiç eşleşme yoksa, USDA'ya KANONİK (İngilizce) sorgu gönderilir", async () => {
+    // USDA'nın arama API'si Türkçe metin anlamaz — "tavuk" yerine
+    // "chicken" gönderilmelidir (bkz. foodMatchScoring.ts → toCanonicalQuery).
+    mockSearchByNameWords.mockResolvedValue([]);
+    mockSearchUsdaFoods.mockResolvedValue([]);
+
+    await matchLabelToFoods("tavuk");
+
+    expect(mockSearchUsdaFoods).toHaveBeenCalledWith(
+      "chicken",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("GERÇEK HATA DÜZELTMESİ: 'rice' → 'Rice crackers' ilk sıraya otomatik gelmez, gerçek pirinç üste çıkar", async () => {
     mockSearchByNameWords.mockResolvedValue([]);
     // Bu iki sonuç, ADIM 27'nin canlı testinde GERÇEKTEN karşılaşılan

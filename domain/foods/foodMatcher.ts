@@ -2,9 +2,11 @@ import { foodsRepository } from "./repository";
 import { searchUsdaFoods, getUsdaFoodsByIds, UsdaApiError } from "./usdaClient";
 import { importUsdaFoods, USDA_SOURCE } from "./importUsdaFoods";
 import {
-  scoreUsdaCandidate,
+  scoreFoodCandidate,
   isOffTypeMatch,
   isSecondaryMentionOnly,
+  expandWithSynonyms,
+  toCanonicalQuery,
   MATCH_CONFIDENCE,
 } from "./foodMatchScoring";
 
@@ -74,15 +76,21 @@ const USDA_MAX_CANDIDATES_TO_RETURN = 5;
  */
 async function tryUsdaFallback(label: string): Promise<FoodCandidateMatch[]> {
   try {
+    // USDA'nın kendi arama API'si YALNIZCA İngilizce metin üzerinde
+    // çalışır (bkz. foodMatchScoring.ts → toCanonicalQuery) — `label`
+    // Türkçe kelimeler içeriyorsa (ör. "tavuk"), aramanın KENDİSİ hiçbir
+    // sonuç bulamaz; puanlama/sıralama (aşağıda, scoreFoodCandidate) aday
+    // ZATEN elde edildikten SONRA çalışır, aramanın yerine geçmez.
+    const searchQuery = toCanonicalQuery(label);
     const results = await searchUsdaFoods(
-      label,
+      searchQuery,
       ["Foundation", "SR Legacy"],
       USDA_SEARCH_POOL_SIZE,
     );
     if (results.length === 0) return [];
 
     const scored = results
-      .map((r) => ({ ...r, score: scoreUsdaCandidate(label, r.description) }))
+      .map((r) => ({ ...r, score: scoreFoodCandidate(label, r.description) }))
       .filter((r) => r.score >= MATCH_CONFIDENCE.USDA_MIN_SCORE_TO_SHOW)
       .sort((a, b) => b.score - a.score)
       .slice(0, USDA_MAX_CANDIDATES_TO_RETURN);
@@ -182,14 +190,22 @@ export async function matchLabelToFoods(
   const words = significantWords(label);
   if (words.length === 0) return [];
 
-  const localMatches = await foodsRepository.searchByNameWords(words, 20);
+  // Türkçe bir kelime (ör. "tavuk") geldiğinde, yerel DB'deki İngilizce
+  // isimlerde ("Chicken, ...") bulunabilmesi için eş anlamlılarıyla
+  // (bkz. foodMatchScoring.ts) genişletilir — `words`'ün KENDİSİ
+  // (genişletilmemiş hâli) hâlâ puanlama/loglama için ayrıca tutulur.
+  const searchWords = expandWithSynonyms(words);
+  const localMatches = await foodsRepository.searchByNameWords(searchWords, 20);
 
   if (localMatches.length > 0) {
     const scored = localMatches
       .map((food) => {
-        const nameLower = food.name.toLowerCase();
-        const matchCount = words.filter((w) => nameLower.includes(w)).length;
-        const score = matchCount / words.length;
+        // v2 (ADIM 29): yerel adaylar da USDA adaylarıyla AYNI birleşik
+        // puanlayıcıyla (bkz. foodMatchScoring.ts) değerlendirilir — v1'de
+        // yerel puanlama (ham kelime-örtüşme oranı) ile USDA puanlaması
+        // ayrı, tutarsız formüllerdi. Aynı fonksiyon; pişmiş/çiğ, vücut
+        // parçası, çeşit ve kategori çelişkilerini de artık hesaba katar.
+        const score = scoreFoodCandidate(label, food.name);
         // "chicken" gibi bir kelimenin, aranan besinle İLGİSİZ bir yemeğin
         // (ör. "Fish, tuna salad" için "salad") yalnızca İKİNCİL bir
         // tanımlayıcı olarak geçmesi YA DA açıkça türetilmiş/işlenmiş bir
@@ -198,26 +214,25 @@ export async function matchLabelToFoods(
         // foodMatchScoring.ts'teki DÜRÜSTLÜK NOTU).
         const suspicious =
           isOffTypeMatch(label, food.name) || isSecondaryMentionOnly(label, food.name);
-        return {
-          food,
-          score,
-          suspicious,
-          // Sıralama İÇİN kullanılır — raporlanan `match_score` alanı
-          // DEĞİŞTİRİLMEZ, mevcut davranışın beklediği ham kelime-örtüşme
-          // oranıdır.
-          sortScore: suspicious ? score * 0.5 : score,
-        };
+        return { food, score, suspicious };
       })
       .filter((m) => m.score > 0)
-      .sort((a, b) => b.sortScore - a.sortScore)
+      .sort((a, b) => b.score - a.score)
       .slice(0, 5);
 
     const topScore = scored[0]?.score ?? 0;
     const secondScore = scored[1]?.score ?? 0;
     const isAmbiguous =
       scored.length > 1 && topScore - secondScore < MATCH_CONFIDENCE.AMBIGUITY_GAP;
-    const isLowConfidence = topScore < MATCH_CONFIDENCE.LOCAL_LOW_CONFIDENCE;
-    const listLevelConfirmation = isAmbiguous || isLowConfidence;
+
+    // Bir aday, TEK BAŞINA (rakipsiz) net bir şekilde güvenilir/otomatik
+    // sayılır ancak VE ANCAK: şüpheli İŞARETLENMEMİŞ VE skoru eşiğin
+    // üzerindeyse. Belirsizlik (isAmbiguous) BUNDAN AYRI bir kavramdır:
+    // birden fazla GERÇEKTEN iyi/şüpheli-olmayan yerel aday varsa, USDA'ya
+    // hiç gitmeye gerek YOKTUR — kullanıcı zaten iyi seçenekler arasından
+    // seçer. USDA'ya yalnızca hiçbir iyi/şüpheli-olmayan aday YOKSA bakılır.
+    const isGoodCandidate = (s: (typeof scored)[number]) =>
+      !s.suspicious && s.score >= MATCH_CONFIDENCE.CONFIRMATION_SCORE_THRESHOLD;
 
     const localRanked = scored.map((s) => ({
       match: {
@@ -230,18 +245,21 @@ export async function matchLabelToFoods(
         // önce import edilmiş "Rice crackers") kirlenmişse geçersizdir —
         // bu yüzden her aday, listenin genel durumundan BAĞIMSIZ olarak
         // da ayrıca kontrolden geçirilir (bkz. `suspicious`, yukarıda).
-        requires_user_confirmation: listLevelConfirmation || s.suspicious,
+        // Belirsizlik (isAmbiguous) VEYA düşük skor VEYA şüpheli olmak,
+        // HER BİRİ TEK BAŞINA onay gerektirir.
+        requires_user_confirmation: isAmbiguous || !isGoodCandidate(s),
         has_verified_facts: true as const,
       } satisfies FoodCandidateMatch,
-      sortScore: s.sortScore,
+      sortScore: s.score,
     }));
 
-    if (scored.every((s) => s.suspicious)) {
-      // Yerelde bulunan TEK seçenek(ler) şüpheli (muhtemelen daha önceki
-      // hatalı bir eşleştirmeden kalma, tıpkı bu düzeltmeden önce import
-      // edilmiş "Rice crackers"/"Fish, tuna salad" gibi) — kullanıcıya
-      // GERÇEKTEN daha iyi bir alternatif sunabilmek için USDA'yı da dene
-      // ve iki kaynağı, "şüpheli olmayan önce, sonra skora göre" birleştir.
+    if (!scored.some(isGoodCandidate)) {
+      // Yerelde GERÇEKTEN iyi/şüpheli-olmayan hiçbir aday yoksa (hepsi
+      // şüpheli veya düşük skorlu — muhtemelen daha önceki hatalı bir
+      // eşleştirmeden kalma, tıpkı bu düzeltmeden önce import edilmiş
+      // "Rice crackers"/"Fish, tuna salad" gibi) — kullanıcıya GERÇEKTEN
+      // daha iyi bir alternatif sunabilmek için USDA'yı da dene ve iki
+      // kaynağı skora göre birleştir.
       const usdaRanked = (await tryUsdaFallback(label)).map((match) => ({
         match,
         sortScore: match.match_score,
