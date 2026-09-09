@@ -28,6 +28,15 @@ export interface PhotoAnalysisResult {
   is_ambiguous: boolean;
   is_low_confidence: boolean;
   is_unrecognized: boolean;
+  /**
+   * true ise: arayüz otomatik/varsayılan bir seçim yapmadan ÖNCE
+   * kullanıcıya adayları göstermeli ve açık bir seçim istemelidir. AI
+   * seviyesindeki belirsizlik/düşük güven (`is_ambiguous`/`is_low_confidence`/
+   * `is_unrecognized`) YA DA FoodMatcher seviyesindeki belirsizlik (bkz.
+   * FoodCandidateMatch.requires_user_confirmation — ör. bir USDA fallback
+   * eşleşmesi) varsa true olur.
+   */
+  requires_user_confirmation: boolean;
 }
 
 export interface PhotoAnalysisDeps {
@@ -74,14 +83,23 @@ export async function analyzeFoodPhoto(
     }
   }
 
+  const isAmbiguous =
+    sortedLabels.length >= 2 &&
+    topConfidence - secondConfidence < AMBIGUITY_CONFIDENCE_GAP;
+  const isLowConfidence = topConfidence < LOW_CONFIDENCE_THRESHOLD;
+  const isUnrecognized = candidates.length === 0;
+
   return {
     candidates,
     estimated_weight_g: validated.estimated_weight_g,
     visual_description: validated.visual_description,
-    is_ambiguous:
-      sortedLabels.length >= 2 &&
-      topConfidence - secondConfidence < AMBIGUITY_CONFIDENCE_GAP,
-    is_low_confidence: topConfidence < LOW_CONFIDENCE_THRESHOLD,
-    is_unrecognized: candidates.length === 0,
+    is_ambiguous: isAmbiguous,
+    is_low_confidence: isLowConfidence,
+    is_unrecognized: isUnrecognized,
+    requires_user_confirmation:
+      isAmbiguous ||
+      isLowConfidence ||
+      isUnrecognized ||
+      candidates.some((c) => c.requires_user_confirmation),
   };
 }

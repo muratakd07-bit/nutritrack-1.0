@@ -21,7 +21,14 @@ function fakeSource(result: unknown): FoodRecognitionSource {
 beforeEach(() => {
   mockMatchLabelToFoods.mockReset();
   mockMatchLabelToFoods.mockResolvedValue([
-    { food_id: "food-1", name: "Matched Food", match_source: "LOCAL", match_score: 0.8 },
+    {
+      food_id: "food-1",
+      name: "Matched Food",
+      match_source: "LOCAL",
+      match_score: 0.8,
+      requires_user_confirmation: false,
+      has_verified_facts: true,
+    },
   ]);
 });
 
@@ -130,7 +137,16 @@ describe("analyzeFoodPhoto", () => {
       expect(candidate).not.toHaveProperty("protein_g");
       // Yalnızca kimlik/eşleştirme bilgisi taşınmalı:
       expect(Object.keys(candidate).sort()).toEqual(
-        ["ai_confidence", "food_id", "label", "match_score", "match_source", "name"].sort(),
+        [
+          "ai_confidence",
+          "food_id",
+          "has_verified_facts",
+          "label",
+          "match_score",
+          "match_source",
+          "name",
+          "requires_user_confirmation",
+        ].sort(),
       );
     }
   });
@@ -145,6 +161,65 @@ describe("analyzeFoodPhoto", () => {
     const result = await analyzeFoodPhoto(SAMPLE_INPUT, { recognitionSource: source });
     expect(result.estimated_weight_g).toBe(175);
     expect(result).not.toHaveProperty("consumed_weight_g");
+  });
+
+  it("requires_user_confirmation: FoodMatcher'ın kendisi belirsizse (ör. USDA fallback) true olur, AI güveni yüksek olsa bile", async () => {
+    mockMatchLabelToFoods.mockResolvedValue([
+      {
+        food_id: "food-usda-1",
+        name: "USDA'dan gelen aday",
+        match_source: "USDA_FDC",
+        match_score: 0.6,
+        requires_user_confirmation: true, // USDA fallback her zaman onay ister
+        has_verified_facts: true,
+      },
+    ]);
+    const source = fakeSource({
+      candidate_labels: [{ label: "rice", confidence: 0.95 }], // AI çok emin
+      estimated_weight_g: 150,
+      visual_description: "desc",
+    });
+
+    const result = await analyzeFoodPhoto(SAMPLE_INPUT, { recognitionSource: source });
+
+    expect(result.is_ambiguous).toBe(false);
+    expect(result.is_low_confidence).toBe(false);
+    // AI seviyesinde her şey net olsa da, FoodMatcher seviyesindeki
+    // belirsizlik üst seviyeye yansımalı — kullanıcı onayı istenmeli.
+    expect(result.requires_user_confirmation).toBe(true);
+  });
+
+  it("requires_user_confirmation: hem AI hem FoodMatcher netse (tek, güvenilir yerel eşleşme) false olur", async () => {
+    mockMatchLabelToFoods.mockResolvedValue([
+      {
+        food_id: "food-1",
+        name: "Chicken, broiler or fryers, breast, cooked",
+        match_source: "LOCAL",
+        match_score: 1,
+        requires_user_confirmation: false,
+        has_verified_facts: true,
+      },
+    ]);
+    const source = fakeSource({
+      candidate_labels: [{ label: "chicken breast", confidence: 0.95 }],
+      estimated_weight_g: 150,
+      visual_description: "desc",
+    });
+
+    const result = await analyzeFoodPhoto(SAMPLE_INPUT, { recognitionSource: source });
+    expect(result.requires_user_confirmation).toBe(false);
+  });
+
+  it("requires_user_confirmation: tanınamadığında (is_unrecognized) da true olur", async () => {
+    mockMatchLabelToFoods.mockResolvedValue([]);
+    const source = fakeSource({
+      candidate_labels: [],
+      estimated_weight_g: 100,
+      visual_description: "desc",
+    });
+
+    const result = await analyzeFoodPhoto(SAMPLE_INPUT, { recognitionSource: source });
+    expect(result.requires_user_confirmation).toBe(true);
   });
 
   it("en fazla ilk 3 etiket için eşleştirme dener (maliyet kontrolü)", async () => {

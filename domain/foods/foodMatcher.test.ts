@@ -44,17 +44,53 @@ beforeEach(() => {
   mockImportUsdaFoods.mockReset();
 });
 
-describe("matchLabelToFoods", () => {
-  it("yerelde eşleşme varsa USDA'ya hiç istek atmaz", async () => {
+/**
+ * `findFactsBySourceRef` + `findById` + `importUsdaFoods`'u gerçekçi bir
+ * sırayla simüle eder: `alreadyImported` verilenler HER ZAMAN mevcuttur
+ * (import tetiklenmez); `newlyImported` verilenler yalnızca
+ * `importUsdaFoods` ÇAĞRILDIKTAN SONRA "mevcut" hale gelir (gerçek kodun
+ * "önce kontrol et, yoksa fetch+import et, sonra tekrar kontrol et"
+ * sırasını doğru test edebilmek için).
+ */
+function stubUsdaFoodResolution(opts: {
+  alreadyImported?: Record<number, { foodId: string; name: string }>;
+  newlyImported?: Record<number, { foodId: string; name: string }>;
+}) {
+  const already = opts.alreadyImported ?? {};
+  const pending = opts.newlyImported ?? {};
+  let imported = false;
+
+  mockFindFactsBySourceRef.mockImplementation(
+    async (_source: string, sourceRef: string) => {
+      const id = Number(sourceRef);
+      if (already[id]) return { foodId: already[id].foodId };
+      if (imported && pending[id]) return { foodId: pending[id].foodId };
+      return null;
+    },
+  );
+  mockImportUsdaFoods.mockImplementation(async () => {
+    imported = true;
+    return { importedCount: Object.keys(pending).length };
+  });
+  mockFindById.mockImplementation(async (foodId: string) => {
+    const all = { ...already, ...pending };
+    const entry = Object.values(all).find((e) => e.foodId === foodId);
+    return entry ? { id: entry.foodId, name: entry.name } : null;
+  });
+}
+
+describe("matchLabelToFoods — yerel eşleşme", () => {
+  it("yerelde eşleşme varsa USDA'ya hiç istek atmaz (chicken stir fry → gerçek tavuk göğsü adayı)", async () => {
     mockSearchByNameWords.mockResolvedValue([
       { id: "food-1", name: "Chicken, broiler or fryers, breast, cooked" },
     ]);
 
-    const result = await matchLabelToFoods("grilled chicken breast");
+    const result = await matchLabelToFoods("chicken stir fry");
 
     expect(result).toHaveLength(1);
     expect(result[0].match_source).toBe("LOCAL");
     expect(result[0].food_id).toBe("food-1");
+    expect(result[0].has_verified_facts).toBe(true);
     expect(mockSearchUsdaFoods).not.toHaveBeenCalled();
   });
 
@@ -76,42 +112,199 @@ describe("matchLabelToFoods", () => {
     expect(mockSearchByNameWords).not.toHaveBeenCalled();
   });
 
-  it("yerelde eşleşme yoksa USDA fallback dener ve yeni food'u import eder", async () => {
+  it("tek, net baskın bir yerel eşleşme varsa requires_user_confirmation=false (güvenilir, otomatik)", async () => {
+    mockSearchByNameWords.mockResolvedValue([
+      { id: "food-1", name: "Chicken, broiler or fryers, breast, cooked" },
+    ]);
+
+    const result = await matchLabelToFoods("chicken breast");
+    expect(result[0].requires_user_confirmation).toBe(false);
+  });
+
+  it("belirsiz (skorları birbirine yakın) yerel eşleşmelerde requires_user_confirmation=true", async () => {
+    mockSearchByNameWords.mockResolvedValue([
+      { id: "a", name: "Apple, raw, with skin" },
+      { id: "b", name: "Apple, raw, without skin" },
+    ]);
+
+    const result = await matchLabelToFoods("apple raw");
+    expect(result.every((r) => r.requires_user_confirmation)).toBe(true);
+  });
+
+  it("GERÇEK SENARYO: 'Rice crackers' ZATEN yerel DB'deyse (önceki hatalı bir importtan), tek/baskın eşleşme olsa bile requires_user_confirmation=true olur", async () => {
+    // Bu, ADIM 27'nin canlı testinde GERÇEKTEN olan şeydir: düzeltmeden
+    // önceki bir çalıştırma "Rice crackers"i USDA'dan yerel DB'ye import
+    // etti. O andan itibaren "rice" sorgusu YEREL arama dalına düşer ve
+    // TEK/baskın eşleşme olduğu için (rakip yok) eskiden otomatik/onaysız
+    // kabul edilirdi — off-type kontrolü olmadan hata veriye KALICI olarak
+    // gömülmüş olurdu.
+    mockSearchByNameWords.mockResolvedValue([
+      { id: "food-crackers", name: "Rice crackers" },
+    ]);
+    // Tüm yerel adaylar "şüpheli" olduğunda kod GERÇEKTEN daha iyi bir
+    // alternatif olup olmadığını görmek için USDA'yı da dener (bkz.
+    // aşağıdaki ayrı test) — burada USDA'da da hiçbir şey yok, tek/baskın
+    // şüpheli yerel adayla kalınır.
+    mockSearchUsdaFoods.mockResolvedValue([]);
+
+    const result = await matchLabelToFoods("rice");
+
+    expect(result).toHaveLength(1);
+    expect(result[0].match_source).toBe("LOCAL");
+    expect(result[0].requires_user_confirmation).toBe(true);
+  });
+
+  it("GERÇEK SENARYO: yereldeki TEK aday şüpheliyse ('Rice crackers') VE USDA'da gerçekten daha iyi bir alternatif varsa, o alternatif üste çıkar", async () => {
+    mockSearchByNameWords.mockResolvedValue([
+      { id: "food-crackers", name: "Rice crackers" },
+    ]);
+    mockSearchUsdaFoods.mockResolvedValue([
+      { fdcId: 222, description: "Rice, white, long-grain, regular, cooked" },
+    ]);
+    stubUsdaFoodResolution({
+      newlyImported: {
+        222: { foodId: "food-white-rice", name: "Rice, white, long-grain, regular, cooked" },
+      },
+    });
+    mockGetUsdaFoodsByIds.mockResolvedValue([]);
+
+    const result = await matchLabelToFoods("rice");
+
+    expect(result[0].food_id).toBe("food-white-rice");
+    expect(result[0].match_source).toBe("USDA_FDC");
+    const crackers = result.find((r) => r.food_id === "food-crackers");
+    expect(crackers?.requires_user_confirmation).toBe(true);
+  });
+
+  it("GERÇEK SENARYO: yerelde hem 'Fish, tuna salad' hem gerçek bir salata varsa, salata üste sıralanır", async () => {
+    mockSearchByNameWords.mockResolvedValue([
+      { id: "food-tuna-salad", name: "Fish, tuna salad" },
+      { id: "food-veg-salad", name: "Salad, vegetable, tossed, without dressing" },
+    ]);
+
+    const result = await matchLabelToFoods("salad");
+
+    expect(result[0].food_id).toBe("food-veg-salad");
+    expect(
+      result.find((r) => r.food_id === "food-tuna-salad")?.requires_user_confirmation,
+    ).toBe(true);
+  });
+
+  it("düşük skorlu tek bir yerel eşleşmede requires_user_confirmation=true", async () => {
+    mockSearchByNameWords.mockResolvedValue([
+      { id: "weak", name: "Mixed dish containing chicken, unspecified" },
+    ]);
+
+    // "grilled chicken breast fillet" kelimelerinden yalnızca "chicken"
+    // geçiyor -> düşük skor.
+    const result = await matchLabelToFoods("grilled chicken breast fillet");
+    expect(result[0].match_score).toBeLessThan(0.5);
+    expect(result[0].requires_user_confirmation).toBe(true);
+  });
+});
+
+describe("matchLabelToFoods — USDA fallback candidate ranking (ADIM 27 gerçek hata düzeltmesi)", () => {
+  it("GERÇEK HATA DÜZELTMESİ: 'rice' → 'Rice crackers' ilk sıraya otomatik gelmez, gerçek pirinç üste çıkar", async () => {
+    mockSearchByNameWords.mockResolvedValue([]);
+    // Bu iki sonuç, ADIM 27'nin canlı testinde GERÇEKTEN karşılaşılan
+    // "Rice crackers" ile birlikte, USDA'nın tipik taksonomi formatında
+    // temsili bir "gerçek pirinç" sonucunu simüle eder.
+    mockSearchUsdaFoods.mockResolvedValue([
+      { fdcId: 111, description: "Rice crackers" },
+      { fdcId: 222, description: "Rice, white, long-grain, regular, cooked" },
+    ]);
+    stubUsdaFoodResolution({
+      newlyImported: {
+        111: { foodId: "food-crackers", name: "Rice crackers" },
+        222: { foodId: "food-white-rice", name: "Rice, white, long-grain, regular, cooked" },
+      },
+    });
+    mockGetUsdaFoodsByIds.mockResolvedValue([]);
+
+    const result = await matchLabelToFoods("rice");
+
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].food_id).toBe("food-white-rice");
+    expect(result[0].name).not.toMatch(/cracker/i);
+    // "Rice crackers" tamamen elenmemiş olabilir (kelime örtüşmesi var) ama
+    // KESİNLİKLE ilk sırada DEĞİL.
+    const crackersIndex = result.findIndex((r) => r.food_id === "food-crackers");
+    if (crackersIndex !== -1) {
+      expect(crackersIndex).toBeGreaterThan(0);
+    }
+    expect(result.every((r) => r.requires_user_confirmation)).toBe(true);
+    expect(result.every((r) => r.has_verified_facts)).toBe(true);
+  });
+
+  it("GERÇEK HATA DÜZELTMESİ: 'salad' → 'Fish, tuna salad' otomatik ilk sıraya gelmez", async () => {
     mockSearchByNameWords.mockResolvedValue([]);
     mockSearchUsdaFoods.mockResolvedValue([
-      { fdcId: 999, description: "Broccoli, raw" },
+      { fdcId: 333, description: "Fish, tuna salad" },
+      { fdcId: 444, description: "Salad, vegetable, tossed, without dressing" },
     ]);
-    mockFindFactsBySourceRef.mockResolvedValueOnce(null); // henüz import edilmemiş
-    mockGetUsdaFoodsByIds.mockResolvedValue([{ fdcId: 999, description: "Broccoli, raw", foodNutrients: [] }]);
-    mockImportUsdaFoods.mockResolvedValue({ importedCount: 1 });
-    mockFindFactsBySourceRef.mockResolvedValueOnce({ foodId: "new-food-id" }); // import sonrası
-    mockFindById.mockResolvedValue({ id: "new-food-id", name: "Broccoli, raw" });
+    stubUsdaFoodResolution({
+      newlyImported: {
+        333: { foodId: "food-tuna-salad", name: "Fish, tuna salad" },
+        444: { foodId: "food-veg-salad", name: "Salad, vegetable, tossed, without dressing" },
+      },
+    });
+    mockGetUsdaFoodsByIds.mockResolvedValue([]);
+
+    const result = await matchLabelToFoods("salad");
+
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].food_id).toBe("food-veg-salad");
+  });
+
+  it("yerelde eşleşme yoksa USDA fallback dener, birden fazla makul adayı import eder ve hepsini döner (multiple candidates)", async () => {
+    mockSearchByNameWords.mockResolvedValue([]);
+    mockSearchUsdaFoods.mockResolvedValue([
+      { fdcId: 501, description: "Broccoli, raw" },
+      { fdcId: 502, description: "Broccoli, cooked, boiled, drained, without salt" },
+    ]);
+    stubUsdaFoodResolution({
+      newlyImported: {
+        501: { foodId: "food-broccoli-raw", name: "Broccoli, raw" },
+        502: { foodId: "food-broccoli-cooked", name: "Broccoli, cooked, boiled, drained, without salt" },
+      },
+    });
+    mockGetUsdaFoodsByIds.mockResolvedValue([]);
 
     const result = await matchLabelToFoods("broccoli");
 
-    expect(mockImportUsdaFoods).toHaveBeenCalledWith([999], expect.anything());
-    expect(result).toEqual([
-      {
-        food_id: "new-food-id",
-        name: "Broccoli, raw",
-        match_source: "USDA_FDC",
-        match_score: 0.5,
-      },
-    ]);
+    expect(mockImportUsdaFoods).toHaveBeenCalledWith([501, 502], expect.anything());
+    expect(result.length).toBe(2);
+    expect(result.every((r) => r.match_source === "USDA_FDC")).toBe(true);
+    expect(result.every((r) => r.requires_user_confirmation)).toBe(true);
   });
 
   it("USDA'da zaten import edilmiş bir food varsa TEKRAR import etmez", async () => {
     mockSearchByNameWords.mockResolvedValue([]);
     mockSearchUsdaFoods.mockResolvedValue([
-      { fdcId: 331960, description: "Chicken breast" },
+      { fdcId: 331960, description: "Chicken, broiler or fryers, breast, cooked" },
     ]);
-    mockFindFactsBySourceRef.mockResolvedValue({ foodId: "existing-food-id" });
-    mockFindById.mockResolvedValue({ id: "existing-food-id", name: "Chicken breast" });
+    stubUsdaFoodResolution({
+      alreadyImported: {
+        331960: { foodId: "existing-food-id", name: "Chicken, broiler or fryers, breast, cooked" },
+      },
+    });
 
     const result = await matchLabelToFoods("chicken breast");
 
     expect(mockImportUsdaFoods).not.toHaveBeenCalled();
     expect(result[0].food_id).toBe("existing-food-id");
+  });
+
+  it("çok düşük alaka düzeyindeki (skor eşiğin altında) USDA sonuçları hiç döndürülmez (no match)", async () => {
+    mockSearchByNameWords.mockResolvedValue([]);
+    mockSearchUsdaFoods.mockResolvedValue([
+      { fdcId: 999, description: "Beef, ground, 80% lean meat / 20% fat, raw" },
+    ]);
+
+    const result = await matchLabelToFoods("xyz nonexistent food term");
+
+    expect(result).toEqual([]);
+    expect(mockImportUsdaFoods).not.toHaveBeenCalled();
   });
 
   it("USDA rate limit hatasında ÇÖKMEZ, boş sonuç döner", async () => {
