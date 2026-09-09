@@ -148,17 +148,21 @@ describe.skipIf(!RUN_DB || !HAS_QWEN_CREDS)(
     let prisma: typeof import("@/lib/db/prisma").prisma;
     let analyzeFoodPhoto: typeof import("./photoAnalysis").analyzeFoodPhoto;
     let createMealItemForUser: typeof import("@/domain/meal/service").createMealItemForUser;
+    let listMealItemsForUser: typeof import("@/domain/meal/service").listMealItemsForUser;
     let getDailySummaryForUser: typeof import("@/domain/reports/dailySummary").getDailySummaryForUser;
 
     const testRunId = randomUUID();
     const userId = randomUUID();
     const cleanupUserIds: string[] = [userId];
     let liveAnalysis: Awaited<ReturnType<typeof analyzeFoodPhoto>>;
+    let matchedFoodId: string | undefined;
 
     beforeAll(async () => {
       ({ prisma } = await import("@/lib/db/prisma"));
       ({ analyzeFoodPhoto } = await import("./photoAnalysis"));
-      ({ createMealItemForUser } = await import("@/domain/meal/service"));
+      ({ createMealItemForUser, listMealItemsForUser } = await import(
+        "@/domain/meal/service"
+      ));
       ({ getDailySummaryForUser } = await import(
         "@/domain/reports/dailySummary"
       ));
@@ -235,6 +239,7 @@ describe.skipIf(!RUN_DB || !HAS_QWEN_CREDS)(
       }
 
       const candidate = liveAnalysis.candidates[0];
+      matchedFoodId = candidate.food_id;
       const facts = await prisma.foodNutritionFacts.findUnique({
         where: { foodId: candidate.food_id },
       });
@@ -264,6 +269,45 @@ describe.skipIf(!RUN_DB || !HAS_QWEN_CREDS)(
       const summary = await getDailySummaryForUser(userId, new Date());
       expect(summary.item_count).toBe(1);
       expect(summary.energy_kcal).toBe(expectedKcal);
+      },
+      45_000,
+    );
+
+    it(
+      "idempotency + user isolation (gerçek DB, eşleşme varsa)",
+      async () => {
+        if (!matchedFoodId) {
+          // Önceki testte hiçbir gerçek food_id'ye eşleşme olmadıysa, burada
+          // test edecek bir MealItem akışı yok — bu GEÇERLİ bir durumdur.
+          return;
+        }
+
+        const idempotencyKey = `adim27-live-idem-${testRunId}`;
+        const first = await createMealItemForUser(userId, {
+          food_id: matchedFoodId,
+          consumed_weight_g: 111,
+          meal_type: "SNACK",
+          idempotency_key: idempotencyKey,
+        });
+        const second = await createMealItemForUser(userId, {
+          food_id: matchedFoodId,
+          consumed_weight_g: 999, // farklı gramaj verilse bile aynı kayıt dönmeli
+          meal_type: "SNACK",
+          idempotency_key: idempotencyKey,
+        });
+        expect(second.id).toBe(first.id);
+        expect(second.consumedWeightG).toBe(111);
+
+        const otherUserId = randomUUID();
+        cleanupUserIds.push(otherUserId);
+        await prisma.user.create({
+          data: {
+            id: otherUserId,
+            email: `adim27-live-other-${testRunId}@test.invalid`,
+          },
+        });
+        const otherUsersItems = await listMealItemsForUser(otherUserId);
+        expect(otherUsersItems).toHaveLength(0);
       },
       45_000,
     );
