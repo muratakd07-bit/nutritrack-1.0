@@ -176,6 +176,37 @@ describe("matchLabelToFoods — yerel eşleşme", () => {
     expect(crackers?.requires_user_confirmation).toBe(true);
   });
 
+  it("GERÇEK HATA DÜZELTMESİ: aynı food_id hem yerelde hem USDA aramasında tekrar dönerse, sonuçta İKİ KEZ görünmez", async () => {
+    // ADIM 28'in gerçek --limit 100 importundan sonra CANLI olarak
+    // gözlemlendi: "Rice crackers" zaten yerelde varken, USDA araması
+    // AYNI fdcId'yi (zaten import edilmiş) tekrar döndürdü — birleştirme
+    // mantığı bunu food_id'ye göre TEKİLLEŞTİRMEDEN önce sonuç listesinde
+    // aynı food_id iki kez (biri LOCAL, biri USDA_FDC etiketiyle) görünüyordu.
+    mockSearchByNameWords.mockResolvedValue([
+      { id: "food-crackers", name: "Rice crackers" },
+    ]);
+    mockSearchUsdaFoods.mockResolvedValue([
+      { fdcId: 111, description: "Rice crackers" }, // zaten yerelde olanla AYNI food
+      { fdcId: 222, description: "Rice, white, long-grain, regular, cooked" },
+    ]);
+    stubUsdaFoodResolution({
+      alreadyImported: {
+        111: { foodId: "food-crackers", name: "Rice crackers" },
+      },
+      newlyImported: {
+        222: { foodId: "food-white-rice", name: "Rice, white, long-grain, regular, cooked" },
+      },
+    });
+    mockGetUsdaFoodsByIds.mockResolvedValue([]);
+
+    const result = await matchLabelToFoods("rice");
+
+    const foodIds = result.map((r) => r.food_id);
+    expect(new Set(foodIds).size).toBe(foodIds.length); // tekrar YOK
+    expect(result.filter((r) => r.food_id === "food-crackers")).toHaveLength(1);
+    expect(result[0].food_id).toBe("food-white-rice"); // gerçek alternatif hâlâ üstte
+  });
+
   it("GERÇEK SENARYO: yerelde hem 'Fish, tuna salad' hem gerçek bir salata varsa, salata üste sıralanır", async () => {
     mockSearchByNameWords.mockResolvedValue([
       { id: "food-tuna-salad", name: "Fish, tuna salad" },

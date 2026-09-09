@@ -148,6 +148,22 @@ async function tryUsdaFallback(label: string): Promise<FoodCandidateMatch[]> {
 }
 
 /**
+ * Yerel + USDA havuzları birleştirildiğinde AYNI food_id iki kez
+ * görünebilir (ör. "Rice crackers" hem yerelde bulunur HEM DE USDA
+ * araması tekrar döndürebilir) — bu, ADIM 28'in gerçek verilerle
+ * testinde canlı olarak gözlemlendi. Sıralamadan SONRA çağrılmalıdır;
+ * her food_id'nin İLK (en yüksek sortScore'lu) geçtiği yeri korur.
+ */
+function dedupeByFoodId<T extends { match: FoodCandidateMatch }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.match.food_id)) return false;
+    seen.add(item.match.food_id);
+    return true;
+  });
+}
+
+/**
  * AI'nin döndürdüğü serbest metin bir besin ismini (`label`), gerçek
  * `Food` kayıtlarıyla eşleştirir.
  *
@@ -230,9 +246,9 @@ export async function matchLabelToFoods(
         match,
         sortScore: match.match_score,
       }));
-      return [...localRanked, ...usdaRanked]
-        .sort((a, b) => b.sortScore - a.sortScore)
-        .map((r) => r.match);
+      return dedupeByFoodId(
+        [...localRanked, ...usdaRanked].sort((a, b) => b.sortScore - a.sortScore),
+      ).map((r) => r.match);
     }
 
     return localRanked.sort((a, b) => b.sortScore - a.sortScore).map((r) => r.match);
