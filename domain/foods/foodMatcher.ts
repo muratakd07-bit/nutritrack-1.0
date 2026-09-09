@@ -5,6 +5,7 @@ import {
   scoreFoodCandidate,
   isOffTypeMatch,
   isSecondaryMentionOnly,
+  hasExactIdentityMismatch,
   expandWithSynonyms,
   toCanonicalQuery,
   MATCH_CONFIDENCE,
@@ -143,7 +144,7 @@ async function tryUsdaFallback(label: string): Promise<FoodCandidateMatch[]> {
       });
     }
 
-    return candidates.sort((a, b) => b.match_score - a.match_score);
+    return dedupeByFoodId(candidates.sort((a, b) => b.match_score - a.match_score));
   } catch (error) {
     // USDA rate limit / ağ hatası: eşleştirmeyi tamamen BAŞARISIZ etmez,
     // yalnızca bu kaynaktan aday sunulamaz (bkz. domain/nutrition/photoAnalysis.ts
@@ -156,17 +157,17 @@ async function tryUsdaFallback(label: string): Promise<FoodCandidateMatch[]> {
 }
 
 /**
- * Yerel + USDA havuzları birleştirildiğinde AYNI food_id iki kez
- * görünebilir (ör. "Rice crackers" hem yerelde bulunur HEM DE USDA
- * araması tekrar döndürebilir) — bu, ADIM 28'in gerçek verilerle
- * testinde canlı olarak gözlemlendi. Sıralamadan SONRA çağrılmalıdır;
- * her food_id'nin İLK (en yüksek sortScore'lu) geçtiği yeri korur.
+ * Aynı food_id, farklı fdcId'ler üzerinden USDA aramasında birden fazla
+ * kez dönebilir (ör. bir food zaten import edilmişken USDA araması onu
+ * tekrar bulursa) — bu, ADIM 28'in gerçek verilerle testinde canlı
+ * olarak gözlemlendi. Sıralamadan SONRA çağrılmalıdır; her food_id'nin
+ * İLK (en yüksek skorlu) geçtiği yeri korur.
  */
-function dedupeByFoodId<T extends { match: FoodCandidateMatch }>(items: T[]): T[] {
+function dedupeByFoodId(items: FoodCandidateMatch[]): FoodCandidateMatch[] {
   const seen = new Set<string>();
   return items.filter((item) => {
-    if (seen.has(item.match.food_id)) return false;
-    seen.add(item.match.food_id);
+    if (seen.has(item.food_id)) return false;
+    seen.add(item.food_id);
     return true;
   });
 }
@@ -180,9 +181,16 @@ function dedupeByFoodId<T extends { match: FoodCandidateMatch }>(items: T[]): T[
  * sözleşmesiyle ayrıca hesaplanır.
  *
  * Sıra: önce yerel veritabanı (hızlı, ağ gerektirmez, ADMIN/USDA ile
- * doğrulanmış). Yerelde eşleşme varsa USDA'ya HİÇ bakılmaz — yerel
- * veriler her zaman güvenilir şekilde önceliklendirilir. Yerelde
- * eşleşme yoksa KONTROLLÜ bir USDA fallback denenir (bkz. tryUsdaFallback).
+ * doğrulanmış). Yerelde EN AZ BİR eşleşme varsa USDA'ya HİÇ bakılmaz —
+ * kaynak ne olursa olsun HİÇBİR aday sessizce "otomatik güvenilir"
+ * sayılmaz (bkz. `requires_user_confirmation`); yerel bir aday şüpheli/
+ * belirsiz olsa BİLE, bunu düzeltmenin yolu USDA'dan DAHA FAZLA veri
+ * çekip import etmek DEĞİLDİR — bu, ADIM 29'da GERÇEKTEN olan bir hataydı
+ * ("salad"/"tuna salad"/"yogurt"/"apple"/"rice" sorguları, yerelde ZATEN
+ * bir aday varken bile gereksiz yeni USDA importu tetikliyordu). Yerelde
+ * HİÇBİR aday yoksa (searchByNameWords boş dönerse) KONTROLLÜ bir USDA
+ * fallback denenir (bkz. tryUsdaFallback) — keşif YALNIZCA bu durumda
+ * gerçekleşir.
  */
 export async function matchLabelToFoods(
   label: string,
@@ -208,12 +216,17 @@ export async function matchLabelToFoods(
         const score = scoreFoodCandidate(label, food.name);
         // "chicken" gibi bir kelimenin, aranan besinle İLGİSİZ bir yemeğin
         // (ör. "Fish, tuna salad" için "salad") yalnızca İKİNCİL bir
-        // tanımlayıcı olarak geçmesi YA DA açıkça türetilmiş/işlenmiş bir
-        // ürüne (ör. "Rice crackers") işaret etmesi — ikisi de "yerel =
-        // her zaman güvenilir" varsayımını geçersiz kılar (bkz.
+        // tanımlayıcı olarak geçmesi, açıkça türetilmiş/işlenmiş bir ürüne
+        // (ör. "Rice crackers") işaret etmesi, YA DA "GERÇEK aynı besin"
+        // olmayan bir hazırlık durumu/kompozisyon/isim-çeşidi taşıması
+        // (ör. "Rice and vermicelli mix", "Egg, white, dried",
+        // "Rose-apples" — bkz. hasExactIdentityMismatch) — HER BİRİ "yerel
+        // = her zaman güvenilir" varsayımını geçersiz kılar (bkz.
         // foodMatchScoring.ts'teki DÜRÜSTLÜK NOTU).
         const suspicious =
-          isOffTypeMatch(label, food.name) || isSecondaryMentionOnly(label, food.name);
+          isOffTypeMatch(label, food.name) ||
+          isSecondaryMentionOnly(label, food.name) ||
+          hasExactIdentityMismatch(label, food.name);
         return { food, score, suspicious };
       })
       .filter((m) => m.score > 0)
@@ -227,50 +240,27 @@ export async function matchLabelToFoods(
 
     // Bir aday, TEK BAŞINA (rakipsiz) net bir şekilde güvenilir/otomatik
     // sayılır ancak VE ANCAK: şüpheli İŞARETLENMEMİŞ VE skoru eşiğin
-    // üzerindeyse. Belirsizlik (isAmbiguous) BUNDAN AYRI bir kavramdır:
-    // birden fazla GERÇEKTEN iyi/şüpheli-olmayan yerel aday varsa, USDA'ya
-    // hiç gitmeye gerek YOKTUR — kullanıcı zaten iyi seçenekler arasından
-    // seçer. USDA'ya yalnızca hiçbir iyi/şüpheli-olmayan aday YOKSA bakılır.
+    // üzerindeyse. Belirsizlik (isAmbiguous) VEYA düşük skor VEYA şüpheli
+    // olmak, HER BİRİ TEK BAŞINA onay gerektirir — ve BU durumların
+    // hiçbiri USDA'ya gitmeyi TETİKLEMEZ (bkz. yukarıdaki fonksiyon notu).
     const isGoodCandidate = (s: (typeof scored)[number]) =>
       !s.suspicious && s.score >= MATCH_CONFIDENCE.CONFIRMATION_SCORE_THRESHOLD;
 
-    const localRanked = scored.map((s) => ({
-      match: {
-        food_id: s.food.id,
-        name: s.food.name,
-        match_source: "LOCAL" as const,
-        match_score: s.score,
-        // "Yerel = her zaman güvenilir" varsayımı, yerel verinin KENDİSİ
-        // daha önce hatalı bir otomatik eşleştirmeyle (ör. bu düzeltmeden
-        // önce import edilmiş "Rice crackers") kirlenmişse geçersizdir —
-        // bu yüzden her aday, listenin genel durumundan BAĞIMSIZ olarak
-        // da ayrıca kontrolden geçirilir (bkz. `suspicious`, yukarıda).
-        // Belirsizlik (isAmbiguous) VEYA düşük skor VEYA şüpheli olmak,
-        // HER BİRİ TEK BAŞINA onay gerektirir.
-        requires_user_confirmation: isAmbiguous || !isGoodCandidate(s),
-        has_verified_facts: true as const,
-      } satisfies FoodCandidateMatch,
-      sortScore: s.score,
-    }));
-
-    if (!scored.some(isGoodCandidate)) {
-      // Yerelde GERÇEKTEN iyi/şüpheli-olmayan hiçbir aday yoksa (hepsi
-      // şüpheli veya düşük skorlu — muhtemelen daha önceki hatalı bir
-      // eşleştirmeden kalma, tıpkı bu düzeltmeden önce import edilmiş
-      // "Rice crackers"/"Fish, tuna salad" gibi) — kullanıcıya GERÇEKTEN
-      // daha iyi bir alternatif sunabilmek için USDA'yı da dene ve iki
-      // kaynağı skora göre birleştir.
-      const usdaRanked = (await tryUsdaFallback(label)).map((match) => ({
-        match,
-        sortScore: match.match_score,
-      }));
-      return dedupeByFoodId(
-        [...localRanked, ...usdaRanked].sort((a, b) => b.sortScore - a.sortScore),
-      ).map((r) => r.match);
-    }
-
-    return localRanked.sort((a, b) => b.sortScore - a.sortScore).map((r) => r.match);
+    return dedupeByFoodId(
+      scored.map(
+        (s) =>
+          ({
+            food_id: s.food.id,
+            name: s.food.name,
+            match_source: "LOCAL",
+            match_score: s.score,
+            requires_user_confirmation: isAmbiguous || !isGoodCandidate(s),
+            has_verified_facts: true,
+          }) satisfies FoodCandidateMatch,
+      ),
+    );
   }
 
+  // Yerelde HİÇ aday yok — keşif için KONTROLLÜ bir USDA fallback denenir.
   return tryUsdaFallback(label);
 }

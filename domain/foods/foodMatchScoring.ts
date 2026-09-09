@@ -373,6 +373,79 @@ export function isSecondaryMentionOnly(query: string, description: string): bool
 }
 
 /**
+ * Sorgu genel/düz bir besin adıysa (ör. "apple", "rice", "egg") ve
+ * description'da bunun bir HAZIRLIK/İŞLENME durumunu (kurutulmuş, toz,
+ * konserve, tütsülenmiş...) YA DA birden fazla malzemenin KARIŞIMI
+ * olduğunu gösteren bir kelime varsa VE bu sorguda AÇIKÇA istenmediyse,
+ * bu "GERÇEK aynı besin" (exact identity) DEĞİLDİR — ör. "Rice and
+ * vermicelli mix" düz "rice" değildir, "Egg, white, dried" düz "egg"
+ * değildir. `STATE_BUCKETS`'taki (pişmiş/çiğ) kelimelerden AYRIDIR —
+ * onlar zaten çeliştiklerinde cezalandırılıyor; burdakiler sorgu
+ * BUNLARDAN HİÇ BAHSETMEDİĞİNDE bile "bu tam olarak istediğin şey
+ * değil, onaylar mısın?" sinyali verir.
+ */
+const IDENTITY_QUALIFIER_WORDS = new Set([
+  "dried",
+  "dry",
+  "powder",
+  "powdered",
+  "canned",
+  "smoked",
+  "cured",
+  "pickled",
+  "concentrate",
+  "concentrated",
+  "mix",
+  "mixed",
+  "blend",
+  "combination",
+]);
+
+function hasUnrequestedIdentityQualifier(query: string, description: string): boolean {
+  const queryWords = expandWithSynonyms(tokenize(query));
+  const descWords = tokenize(description);
+  return descWords.some(
+    (w) => IDENTITY_QUALIFIER_WORDS.has(w) && !anyWordMatches(w, queryWords),
+  );
+}
+
+/**
+ * Açıklamada, sorgu kelimesinin bir TİRE (hyphen) ile BAŞKA bir kelimeye
+ * bağlı bileşik hâli varsa (ör. "Rose-apples" — bu GERÇEKTE bir elma
+ * (Malus domestica) türü DEĞİLDİR, tamamen farklı bir tropikal meyvedir
+ * ve yalnızca adında "apple" kelimesini İÇERİR), bu GERÇEK besin
+ * kimliğinin sorgudan FARKLI olabileceğinin güçlü, deterministik bir
+ * işaretidir — kelime örtüşmesi (`wordsMatch`'in tekil/çoğul toleransı)
+ * tek başına bunu YAKALAYAMAZ.
+ */
+function hasHyphenatedCompoundVariant(query: string, description: string): boolean {
+  const queryWords = expandWithSynonyms(tokenize(query));
+  const lowerDescription = description.toLowerCase();
+  return queryWords.some((word) => {
+    if (word.length < 4) return false; // kısa kelimelerde yanlış pozitif riski
+    return new RegExp(`-${word}s?\\b`).test(lowerDescription);
+  });
+}
+
+/**
+ * "Exact food identity" kontrolü (ADIM 29 düzeltmesi). Yalnızca kelime
+ * örtüşmesine değil, hazırlık/işlenme durumuna, kompozisyona (tek
+ * malzeme mi karışım mı) ve isim-bazlı çeşit farkına bakar. true
+ * dönerse, aday OTOMATİK/güvenilir kabul EDİLMEMELİDİR — kullanıcı
+ * onayı gerekir (bkz. domain/foods/foodMatcher.ts → `suspicious`).
+ *
+ * Örnekler: rice→"Rice and vermicelli mix" (mix), apple→"Apples, dried"
+ * (dried), apple→"Rose-apples" (bileşik tür adı), egg→"Egg, white,
+ * dried" (dried).
+ */
+export function hasExactIdentityMismatch(query: string, description: string): boolean {
+  return (
+    hasUnrequestedIdentityQualifier(query, description) ||
+    hasHyphenatedCompoundVariant(query, description)
+  );
+}
+
+/**
  * `query` (AI'nin döndürdüğü etiket) ile `description`/`name` (USDA veya
  * yerel bir adayın metni) arasında [0, 1] aralığında bir güven skoru
  * üretir. Daha yüksek = daha güvenilir eşleşme. Hem USDA fallback

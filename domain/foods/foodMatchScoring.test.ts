@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { scoreFoodCandidate, scoreUsdaCandidate } from "./foodMatchScoring";
+import {
+  hasExactIdentityMismatch,
+  scoreFoodCandidate,
+  scoreUsdaCandidate,
+} from "./foodMatchScoring";
 
 /**
  * Aşağıdaki açıklama metinleri, USDA FoodData Central'ın SR Legacy/
@@ -226,5 +230,63 @@ describe("ADIM 29 — özel test case'leri", () => {
 
   it("exact match: sorgu ile açıklama birebir aynıysa (normalize edilmiş) skor tam 1'dir", () => {
     expect(scoreFoodCandidate("Chicken Breast", "chicken breast")).toBe(1);
+  });
+});
+
+/**
+ * ADIM 29 düzeltme turu — "exact food identity" kontrolü.
+ * `hasExactIdentityMismatch`, sadece kelime örtüşmesine değil, hazırlık/
+ * işlenme durumuna, kompozisyona ve isim-çeşidine dayanarak "bu GERÇEKTEN
+ * aynı besin mi, yoksa ondan TÜRETİLMİŞ/FARKLI bir şey mi" ayrımını yapar.
+ */
+describe("hasExactIdentityMismatch — ADIM 29 düzeltmesi", () => {
+  it("rice → 'Rice and vermicelli mix' bir KARIŞIMdır, düz pirinç DEĞİLDİR", () => {
+    expect(
+      hasExactIdentityMismatch("rice", "Rice and vermicelli mix, rice pilaf flavor, unprepared"),
+    ).toBe(true);
+  });
+
+  it("basmati rice → aynı karışım, aynı sebeple uyuşmaz sayılır", () => {
+    expect(
+      hasExactIdentityMismatch(
+        "basmati rice",
+        "Rice and vermicelli mix, rice pilaf flavor, unprepared",
+      ),
+    ).toBe(true);
+  });
+
+  it("apple → 'Apples, dried' bir KURUTMA/işleme durumu taşır, sorgu istemedi", () => {
+    expect(hasExactIdentityMismatch("apple", "Apples, dried, sulfured, uncooked")).toBe(true);
+  });
+
+  it("dried apple → sorgu AÇIKÇA 'dried' dediğinde artık uyuşmazlık SAYILMAZ", () => {
+    expect(hasExactIdentityMismatch("dried apple", "Apples, dried, sulfured, uncooked")).toBe(
+      false,
+    );
+  });
+
+  it("apple → 'Rose-apples' bileşik/tire'li bir tür adıdır (gerçekte FARKLI bir meyve), uyuşmaz sayılır", () => {
+    expect(hasExactIdentityMismatch("apple", "Rose-apples, raw")).toBe(true);
+  });
+
+  it("apple → düz 'Apples, raw, with skin' uyuşmazlık TAŞIMAZ", () => {
+    expect(hasExactIdentityMismatch("apple", "Apples, raw, with skin")).toBe(false);
+  });
+
+  it("egg → 'Egg, white, dried' KURUTULMUŞ bir hâl taşır, sorgu istemedi", () => {
+    expect(hasExactIdentityMismatch("egg", "Egg, white, dried")).toBe(true);
+  });
+
+  it("egg white → 'white' istendi ama 'dried' hâlâ istenmedi, uyuşmazlık kalır", () => {
+    expect(hasExactIdentityMismatch("egg white", "Egg, white, dried")).toBe(true);
+  });
+
+  it("chicken → düz tavuk göğsü kaydında (GERÇEK ADIM 26 kaydı) uyuşmazlık YOKTUR", () => {
+    expect(
+      hasExactIdentityMismatch(
+        "chicken",
+        "Chicken, broiler or fryers, breast, skinless, boneless, meat only, cooked, braised",
+      ),
+    ).toBe(false);
   });
 });
