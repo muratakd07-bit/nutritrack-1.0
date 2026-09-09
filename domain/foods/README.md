@@ -99,6 +99,50 @@ Her `importUsdaFoods` çağrısı, `FoodImportRun` tablosuna bir satır yazar:
 JSON). Bu, "kaç şey oldu" sorusunun ANLIK bir konsol çıktısı değil,
 kalıcı/sorgulanabilir bir cevabıdır.
 
+## FoodMatcher candidate ranking (ADIM 27 düzeltmesi)
+
+`domain/foods/foodMatcher.ts`, AI'nin döndürdüğü serbest metin bir
+etiketi (ör. "rice") gerçek bir `Food` kaydına eşler — bu README'nin
+kapsamındaki import mekanizmasını KULLANIR (USDA fallback bulduğu
+adayları `importUsdaFoods` ile aynı şekilde import eder), ama eşleştirme
+mantığının kendisi ayrı bir dosyada, `domain/foods/foodMatchScoring.ts`'te
+yaşar.
+
+**Gerçek bir hata (ADIM 27'nin canlı fotoğraf testinde bulundu):** Eski
+kod, USDA arama sonucunun İLK elemanını sorgusuz "en iyi eşleşme" kabul
+ediyordu. Bir tabak fotoğrafında AI "rice" ve "salad" dediğinde, bu
+"Rice crackers" ve "Fish, tuna salad" kayıtlarına otomatik eşleşti — her
+ikisi de GERÇEK, doğrulanmış USDA kayıtları, ama aranan şey için yanlış
+kayıtlar. Bu iki kayıt bir kez import edildikten SONRA, "yerel eşleşmeler
+her zaman güvenilirdir" kuralı onları gelecekteki her sorguda (USDA'ya
+hiç bakmadan) tekrar öne çıkarmaya devam ediyordu.
+
+**Düzeltme:** `foodMatchScoring.ts` → `scoreUsdaCandidate` /
+`isOffTypeMatch` / `isSecondaryMentionOnly`, YALNIZCA `description`
+alanına (USDA search yanıtında doğrulanmış tek metinsel alan) dayanan bir
+sezgisel (heuristic) puanlama uygular: USDA'nın taksonomik "Ana besin,
+tanımlayıcı, tanımlayıcı" formatını (baş segment eşleşmesi güçlü sinyal),
+küçük bir "işlenmiş/türetilmiş ürün" kelime listesini (negation-farkında:
+"without dressing" cezalandırılmaz), ve "sorgu yalnızca ikincil bir
+segmentte mi geçiyor" kontrolünü birleştirir. Bu kontrol hem USDA
+fallback adaylarına HEM DE zaten yerel DB'de olan adaylara uygulanır —
+"yerel her zaman güvenilir" varsayımı artık her aday için ayrıca
+doğrulanır; TÜM yerel adaylar şüpheliyse USDA'ya da bakılır ve iki
+havuz birleştirilir.
+
+**Kesin olarak DEĞİŞMEYEN şey:** FoodMatcher hâlâ nutrition değeri
+üretmez/almaz — yalnızca `food_id` adayları (artık her biri
+`requires_user_confirmation` bayrağıyla) önerir. Nihai seçim ve
+`consumed_weight_g` onayı her zaman kullanıcıdadır (bkz.
+`domain/nutrition/README.md`).
+
+**Dürüstlük notu:** Bu bir tam semantik sınıflandırıcı değil, test edilmiş
+bir sezgiseldir — ADIM 26'daki gibi USDA `DEMO_KEY`'in paylaşılan rate
+limiti, bu düzeltmenin canlı "USDA'dan daha iyi bir alternatif buldu"
+davranışını her an tekrar test etmeyi de zorlaştırır; birim testleri
+(`foodMatcher.test.ts`, `foodMatchScoring.test.ts`) bu davranışı ağdan
+bağımsız, deterministik olarak doğrular.
+
 ## Rate limit gerçeği (dürüstçe kaydedilmiş)
 
 USDA'nın `DEMO_KEY`'i resmi olarak saatte 30, günde 50 istekle

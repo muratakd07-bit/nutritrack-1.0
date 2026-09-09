@@ -64,6 +64,22 @@ tanımlı değilse 501 döner. Test/geliştirme için
 `AI_FOOD_RECOGNITION_MODE=mock` (`domain/nutrition/foodRecognitionMock.ts`,
 deterministik) kullanılabilir — production'da ASLA açık bırakılmamalı.
 
+**ADIM 27 canlı doğrulama + FoodMatcher düzeltmesi:** Gerçek Qwen3-VL
+canlı çağrısı (gerçek bir yemek fotoğrafıyla) başarıyla doğrulandı —
+bkz. `domain/nutrition/qwen3vlLiveChain.integration.test.ts`. Bu sırada
+gerçek bir ürün doğruluğu hatası bulundu ve düzeltildi:
+`domain/foods/foodMatcher.ts`, USDA fallback'te İLK arama sonucunu
+sorgusuz kabul ediyordu ("rice"→"Rice crackers", "salad"→"Fish, tuna
+salad" gibi yanlış otomatik eşleşmeler). Artık `domain/foods/foodMatchScoring.ts`
+ile birden fazla aday puanlanıp sıralanıyor, her USDA-kaynaklı aday
+`requires_user_confirmation: true` taşıyor, ve bu kontrol zaten yerel
+DB'de olan (önceki hatalı importlardan kalma) adaylara da uygulanıyor.
+`domain/nutrition/photoAnalysis.ts` → `PhotoAnalysisResult.requires_user_confirmation`
+bunu üst seviyeye taşır; `app/meals/add-photo/page.tsx` artık adayları
+TESPİT EDİLEN HER YİYECEK için ayrı ayrı gruplayıp gösterir (önceden
+birden fazla yiyecek tek bir seçim listesinde karışıyordu). Detaylar:
+[`domain/foods/README.md`](domain/foods/README.md).
+
 **Fotoğraf saklama:** İstemci fotoğrafı DOĞRUDAN kendi private Storage
 klasörüne (`meal-photos/{userId}/...`, bkz. `supabase/storage-setup.sql`
 — gerçek bir Supabase projesine RLS+auth-triggers.sql gibi ayrıca
