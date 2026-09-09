@@ -143,6 +143,67 @@ davranışını her an tekrar test etmeyi de zorlaştırır; birim testleri
 (`foodMatcher.test.ts`, `foodMatchScoring.test.ts`) bu davranışı ağdan
 bağımsız, deterministik olarak doğrular.
 
+## ADIM 28 — Production-ready import: keşif, sayfalama, dayanıklılık
+
+Amaç: USDA veri tabanını KONTROLLÜ ve ÖLÇEKLENEBİLİR şekilde büyütmek —
+ADIM 26'nın "bana bildiğin fdcId'leri ver" modelinden, "bana kaç tane
+gerçek besin istediğini söyle" modeline geçiş.
+
+**Keşif (discovery) modu:** `scripts/import-usda-foods.ts --limit N
+[--page-size M]`, USDA'nın `/foods/list` uç noktasını (bkz.
+`domain/foods/usdaClient.ts` → `listUsdaFoods`) `sortBy=fdcId,
+sortOrder=asc` ile SAYFA SAYFA çağırarak N kadar GERÇEK fdcId keşfeder —
+yalnızca Foundation/SR Legacy. Eski, açık-fdcId modu (`-- 331960 173410`)
+GERİYE DÖNÜK UYUMLU olarak korunmuştur.
+
+**Determinizm = resume:** Sıralama sabit olduğu için aynı `--limit` ile
+TEKRAR çalıştırmak aynı ilk N kaydı keşfeder; zaten import edilenler
+`(source, sourceRef)` kontrolüyle hızlıca "duplicate" sayılıp atlanır —
+ayrı bir "nereden devam edeceğim" durumu SAKLAMAYA gerek yoktur.
+
+**Dayanıklılık (`usdaClient.ts` → `fetchUsdaWithRetry`):** TÜM USDA
+istekleri tek bir noktadan geçer.
+- 429 VE 5xx: üstel geri çekilme (exponential backoff, taban 1sn, üst
+  sınır 15sn/deneme) ile en fazla 4 kez yeniden denenir; 429 yanıtında
+  `Retry-After` header'ı VARSA ona uyulur.
+- Ağ seviyesi hata (DNS/bağlantı/timeout): aynı şekilde yeniden denenir.
+- 4xx (429 HARİÇ, ör. 400/403): ASLA yeniden denenmez — anlamsız/israf.
+- Script seviyesinde: fdcId'ler `FETCH_BATCH_SIZE=20`'lik gruplara
+  bölünür; bir grup (tüm retry'lardan SONRA da) kalıcı olarak
+  başarısız olursa, önceki gruplar KORUNUR (her biri kendi
+  transaction'ında zaten commit edilmiş), script "PARTIAL" olarak
+  raporlayıp çıkar — kaldığı yerden devam etmek için AYNI komut TEKRAR
+  çalıştırılır.
+
+**DEMO_KEY güvenlik kapısı:** `USDA_FDC_API_KEY` tanımlı değilse, script
+`--limit`i `SAFE_DEMO_KEY_LIMIT` (25) ile sınırlar — daha büyük bir
+`--limit` DEMO_KEY ile KENDİLİĞİNDEN başlatılmaz, yalnızca anahtarın
+eksik olduğu ve nereden alınabileceği raporlanır.
+
+**Veri kalitesi:** `usdaMapper.ts` artık `dataType`'ı da doğrular —
+Foundation/SR Legacy DIŞINDA bir tür (ör. Branded, açık-fdcId modunda
+yanlışlıkla verilirse) `mapping_error` olarak işaretlenir, sessizce
+import edilmez. Eksik temel makro (energy/protein/fat/carbohydrate)
+kuralı ADIM 26'dan değişmedi.
+
+**Yeni: `sourceDataType` kolonu** (`FoodNutritionFacts.sourceDataType`,
+nullable — bkz. migration `20260909100226_add_food_source_data_type`):
+`source`'tan (sağlayıcı kimliği, "USDA_FDC") AYRI olarak, Foundation'ı
+SR Legacy'den ayırt eder. ADIM 26/27'de import edilmiş mevcut kayıtlarda
+NULL'dur — geriye dönük veri kaybı/değişimi YOKTUR, yalnızca YENİ
+import edilen kayıtlar bu alanı doldurur.
+
+**Bu oturumdaki gerçek deneme:** `USDA_FDC_API_KEY` bu ortamda tanımlı
+değil (doğrulandı, boolean). `--limit 10` ile KONTROLLÜ bir gerçek
+deneme yapıldı — DEMO_KEY hâlâ rate-limited (429) olduğu için (ADIM
+26/27'de defalarca gözlemlenen aynı paylaşılan-IP kısıtı), keşif adımının
+kendisi 4 gerçek yeniden deneme + gerçek üstel geri çekilmeden (canlı
+olarak ~65 saniye sürdüğü ölçüldü) sonra temiz bir hatayla durdu — **0
+yeni food import edilmedi**, ama mekanizmanın kendisi (retry/backoff/
+temiz hata/önceki başarılı verinin korunması) canlıya karşı DOĞRULANDI.
+Gerçek bir `USDA_FDC_API_KEY` (ücretsiz, https://api.data.gov/signup/)
+bu kısıtı ortadan kaldırır.
+
 ## Rate limit gerçeği (dürüstçe kaydedilmiş)
 
 USDA'nın `DEMO_KEY`'i resmi olarak saatte 30, günde 50 istekle

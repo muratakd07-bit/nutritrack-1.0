@@ -171,6 +171,12 @@ model FoodNutritionFacts {
   /// (bkz. domain/foods/importUsdaFoods.ts).
   source     String
   sourceRef  String?
+  /// Kaynağın KENDİ veri kalitesi/kategorisi ayrımı (ör. USDA_FDC için
+  /// "Foundation" veya "SR Legacy") — `source`'tan (sağlayıcı kimliği)
+  /// AYRI, opsiyonel bir alan. ADIM 28'de eklendi; ADIM 26/27'de import
+  /// edilmiş mevcut kayıtlarda NULL'dur (geriye dönük veri KAYBI/DEĞİŞİMİ
+  /// yoktur — bkz. domain/foods/README.md).
+  sourceDataType String?
   verifiedAt DateTime @default(now())
 
   createdAt DateTime @default(now())

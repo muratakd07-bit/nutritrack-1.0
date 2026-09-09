@@ -10,6 +10,8 @@ import type { FoodNutritionFactsPer100g } from "@/domain/nutrition/calculation";
 export interface NutritionFactsProvenance {
   source: string;
   sourceRef?: string;
+  /** Kaynağın kendi veri kalitesi/kategorisi ayrımı — ör. USDA_FDC için "Foundation"/"SR Legacy". */
+  sourceDataType?: string;
 }
 
 /** Varsayılan client veya bir `$transaction` callback'i içindeki `tx`. */
@@ -54,6 +56,7 @@ export const foodsRepository = {
       fiberGPer100g: facts.fiber_g_per_100g,
       source: provenance.source,
       sourceRef: provenance.sourceRef,
+      sourceDataType: provenance.sourceDataType,
     };
 
     return db.foodNutritionFacts.upsert({

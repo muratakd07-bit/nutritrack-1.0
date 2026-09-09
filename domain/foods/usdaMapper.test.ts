@@ -40,7 +40,17 @@ describe("mapUsdaFoodToVerifiedFood — gerçek USDA verisiyle", () => {
         fiber_g_per_100g: 0,
       },
       sourceRef: "331960",
+      sourceDataType: "Foundation",
     });
+  });
+
+  it("desteklenmeyen bir dataType (ör. Branded) mapping problem olarak işaretlenir, sessizce import edilmez", () => {
+    const branded: UsdaFood = { ...REAL_CHICKEN_BREAST_FIXTURE, dataType: "Branded" };
+    const result = mapUsdaFoodToVerifiedFood(branded);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problem.reason).toContain("Branded");
+    }
   });
 
   it("raporlanmamış fiber'ı 0 kabul eder (mapping problem SAYMAZ)", () => {

@@ -19,6 +19,8 @@ export interface ImportDetail {
   description?: string;
   outcome: ImportOutcome;
   reason?: string;
+  /** USDA'nın kendi veri kalitesi/kategorisi ayrımı — ör. "Foundation", "SR Legacy". */
+  dataType?: string;
 }
 
 export interface ImportSummary {
@@ -96,6 +98,7 @@ export async function importUsdaFoods(
             description: food.description,
             outcome: "mapping_error",
             reason: mapped.problem.reason,
+            dataType: food.dataType,
           });
           continue;
         }
@@ -111,6 +114,7 @@ export async function importUsdaFoods(
             description: food.description,
             outcome: "duplicate",
             reason: `zaten import edilmiş (foodId=${existing.foodId})`,
+            dataType: food.dataType,
           });
           continue;
         }
@@ -119,13 +123,18 @@ export async function importUsdaFoods(
         await foodsRepository.upsertNutritionFacts(
           newFood.id,
           mapped.food.facts,
-          { source: USDA_SOURCE, sourceRef: mapped.food.sourceRef },
+          {
+            source: USDA_SOURCE,
+            sourceRef: mapped.food.sourceRef,
+            sourceDataType: mapped.food.sourceDataType,
+          },
           tx,
         );
         details.push({
           fdcId: food.fdcId,
           description: food.description,
           outcome: "imported",
+          dataType: food.dataType,
         });
       }
     });

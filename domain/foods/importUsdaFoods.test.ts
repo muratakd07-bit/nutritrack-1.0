@@ -153,6 +153,40 @@ describe("importUsdaFoods", () => {
     expect(summary.runId).toBe("run-1");
   });
 
+  it("sourceDataType'ı (Foundation/SR Legacy) facts'e doğru şekilde yazar", async () => {
+    const food = makeFood(888, "Foundation Food");
+    await importUsdaFoods([888], [food]);
+
+    expect(mockUpsertNutritionFacts).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ source: USDA_SOURCE, sourceDataType: "Foundation" }),
+      expect.anything(),
+    );
+  });
+
+  it("MANUEL doğrulanmış bir kayıt (source != USDA_FDC) ASLA ezilmez — arama her zaman source=USDA_FDC ile yapılır", async () => {
+    // Bir admin, aynı fdcId'yi sourceRef olarak kullanarak "MANUAL_VERIFIED"
+    // bir kayıt girmiş olsun. `findFactsBySourceRef` mock'u burada
+    // BİLEREK yalnızca (USDA_FDC, "999") sorgusuna null döner — gerçek
+    // kodun (MANUAL_VERIFIED, "999") diye ayrı bir sorgu YAPMADIĞINI,
+    // dolayısıyla o kaydı asla görmediğini/ezmediğini kanıtlar.
+    mockFindFactsBySourceRef.mockImplementation(
+      async (source: string, sourceRef: string) => {
+        expect(source).toBe(USDA_SOURCE); // asla başka bir source ile aranmaz
+        return sourceRef === "999" ? null : { foodId: "should-not-happen" };
+      },
+    );
+
+    const food = makeFood(999, "Coincidentally Same fdcId As A Manual Entry");
+    const summary = await importUsdaFoods([999], [food]);
+
+    // Yeni bir USDA_FDC kaydı olarak import edilir — manuel kayda hiç
+    // dokunulmaz (zaten ayrı bir Food/FoodNutritionFacts satırıdır).
+    expect(summary.importedCount).toBe(1);
+    expect(mockCreateFood).toHaveBeenCalledTimes(1);
+  });
+
   it("21 food'luk bir isteği birden fazla transaction/batch'e böler", async () => {
     const foods = Array.from({ length: 21 }, (_, i) => makeFood(1000 + i, `Food ${i}`));
     const ids = foods.map((f) => f.fdcId);

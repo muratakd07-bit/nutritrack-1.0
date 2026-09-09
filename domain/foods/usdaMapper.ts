@@ -5,6 +5,8 @@ export interface MappedUsdaFood {
   name: string;
   facts: FoodNutritionFactsPer100g;
   sourceRef: string;
+  /** USDA'nın kendi veri kalitesi/kategorisi ayrımı — ör. "Foundation", "SR Legacy". */
+  sourceDataType: string;
 }
 
 export interface MappingProblem {
@@ -37,7 +39,28 @@ function findAmount(food: UsdaFood, nutrientNumber: string): number | null {
  * eksik fiber, 0 olarak kabul edilir (bu bir "uydurma" değil, USDA'nın
  * kendi veri toplama pratiğiyle tutarlı bir varsayılandır).
  */
+/**
+ * Bu proje YALNIZCA Foundation ve SR Legacy veri tiplerini destekler (bkz.
+ * domain/foods/README.md — Branded'ın porsiyon-bazlı, birim dönüşümü
+ * gerektirebilecek yapısı henüz desteklenmiyor). `listUsdaFoods` zaten bu
+ * ikisiyle filtrelenmiş sonuç döner, ama açık fdcId'lerle çağrılan eski
+ * CLI modunda (bkz. scripts/import-usda-foods.ts) rastgele bir fdcId
+ * Branded/Survey olabilir — bu yüzden burada AYRICA doğrulanır.
+ */
+const SUPPORTED_DATA_TYPES = new Set(["Foundation", "SR Legacy"]);
+
 export function mapUsdaFoodToVerifiedFood(food: UsdaFood): MapUsdaFoodResult {
+  if (!SUPPORTED_DATA_TYPES.has(food.dataType)) {
+    return {
+      ok: false,
+      problem: {
+        fdcId: food.fdcId,
+        description: food.description,
+        reason: `Desteklenmeyen dataType: "${food.dataType}" (yalnızca Foundation/SR Legacy desteklenir)`,
+      },
+    };
+  }
+
   const energy = findAmount(food, USDA_NUTRIENT_NUMBER.ENERGY_KCAL);
   const protein = findAmount(food, USDA_NUTRIENT_NUMBER.PROTEIN_G);
   const fat = findAmount(food, USDA_NUTRIENT_NUMBER.FAT_G);
@@ -73,6 +96,7 @@ export function mapUsdaFoodToVerifiedFood(food: UsdaFood): MapUsdaFoodResult {
         fiber_g_per_100g: fiber,
       },
       sourceRef: String(food.fdcId),
+      sourceDataType: food.dataType,
     },
   };
 }
