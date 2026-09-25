@@ -5,7 +5,9 @@ import { mealItemInputSchema } from "@/lib/validation/meal";
 import {
   createMealItemForUser,
   listMealItemsForUser,
+  listMealItemsWithFoodForUserOnDay,
 } from "@/domain/meal/service";
+import { parseIsoDateUTC } from "@/lib/utils/date";
 import { FoodNutritionFactsNotFoundError } from "@/domain/nutrition/contract";
 import { IdempotencyKeyConflictError } from "@/domain/meal/repository";
 
@@ -78,6 +80,9 @@ export async function POST(request: Request) {
  * `domain/authz/service.ts` → `requireAccessToUserData` ile denetlenir
  * (kendi verisi: her zaman izinli; ADMIN: her zaman izinli; TRAINER: yalnızca
  * atanmış client'lar için izinli; aksi halde 403).
+ *
+ * `date=YYYY-MM-DD` verilirse yalnızca o UTC gününün kayıtları, her biri
+ * besin adıyla (`food.name`) birlikte döner.
  */
 export async function GET(request: Request) {
   try {
@@ -86,11 +91,22 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const targetUserId = searchParams.get("user_id") ?? actorId;
 
+    const dateParam = searchParams.get("date");
+    const day = dateParam === null ? null : parseIsoDateUTC(dateParam);
+    if (dateParam !== null && !day) {
+      return NextResponse.json(
+        { error: "validation_error", message: "date YYYY-MM-DD olmalı" },
+        { status: 400 },
+      );
+    }
+
     if (targetUserId !== actorId) {
       await requireAccessToUserData(actorId, targetUserId);
     }
 
-    const items = await listMealItemsForUser(targetUserId);
+    const items = day
+      ? await listMealItemsWithFoodForUserOnDay(targetUserId, day)
+      : await listMealItemsForUser(targetUserId);
     return NextResponse.json({ data: items });
   } catch (error) {
     const mapped = mapAuthErrorToResponse(error);

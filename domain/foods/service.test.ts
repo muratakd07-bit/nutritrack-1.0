@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockCreateFood = vi.fn();
 const mockUpsertNutritionFacts = vi.fn();
+const mockSearchWithFactsByName = vi.fn();
 
 vi.mock("./repository", () => ({
   foodsRepository: {
@@ -11,11 +12,13 @@ vi.mock("./repository", () => ({
     // Gerçek transaction yok — callback'i doğrudan çalıştırır (testte
     // önemli olan atomiklik değil, createFood/upsertNutritionFacts'in
     // doğru argümanlarla çağrıldığıdır).
+    searchWithFactsByName: (...args: unknown[]) =>
+      mockSearchWithFactsByName(...args),
     runInTransaction: (fn: (tx: unknown) => Promise<unknown>) => fn({}),
   },
 }));
 
-import { createVerifiedFood } from "./service";
+import { createVerifiedFood, searchFoods } from "./service";
 
 const sampleFacts = {
   energy_kcal_per_100g: 165,
@@ -59,5 +62,56 @@ describe("createVerifiedFood", () => {
 
     const [, passedFacts] = mockUpsertNutritionFacts.mock.calls[0];
     expect(passedFacts).toEqual(sampleFacts);
+  });
+});
+
+describe("searchFoods", () => {
+  beforeEach(() => mockSearchWithFactsByName.mockReset());
+
+  it("sorguyu kelimelere böler ve DB'deki 100g değerlerini olduğu gibi döner", async () => {
+    mockSearchWithFactsByName.mockResolvedValue([
+      {
+        id: "food-1",
+        name: "Rice, white, cooked",
+        nutritionFacts: {
+          energyKcalPer100g: 130,
+          proteinGPer100g: 2.7,
+          carbohydratesGPer100g: 28,
+          fatGPer100g: 0.3,
+          fiberGPer100g: 0.4,
+          source: "USDA_FDC",
+        },
+      },
+    ]);
+
+    const result = await searchFoods("  Rice   cooked ");
+
+    expect(mockSearchWithFactsByName).toHaveBeenCalledWith(["rice", "cooked"], 20);
+    expect(result).toEqual([
+      {
+        food_id: "food-1",
+        name: "Rice, white, cooked",
+        per_100g: {
+          energy_kcal_per_100g: 130,
+          protein_g_per_100g: 2.7,
+          carbohydrates_g_per_100g: 28,
+          fat_g_per_100g: 0.3,
+          fiber_g_per_100g: 0.4,
+        },
+        source: "USDA_FDC",
+      },
+    ]);
+  });
+
+  it("yaygın Türkçe kelimeleri İngilizce karşılığıyla arar", async () => {
+    mockSearchWithFactsByName.mockResolvedValue([]);
+    await searchFoods("Pirinç");
+    expect(mockSearchWithFactsByName).toHaveBeenCalledWith(["rice"], 20);
+  });
+
+  it("en fazla 5 kelimeyle arar", async () => {
+    mockSearchWithFactsByName.mockResolvedValue([]);
+    await searchFoods("a b c d e f g");
+    expect(mockSearchWithFactsByName.mock.calls[0][0]).toHaveLength(5);
   });
 });

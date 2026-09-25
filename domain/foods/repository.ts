@@ -151,6 +151,32 @@ export const foodsRepository = {
    * domain/foods/foodMatcher.ts). Facts'i olmayan bir Food, ADIM 16
    * çağrıldığında zaten hata verir — bu yüzden aday olarak hiç sunulmaz.
    */
+  /**
+   * Kullanıcının elle besin araması için: adında sorgudaki KELİMELERİN
+   * HEPSİ geçen ve doğrulanmış besin değeri OLAN food'lar, 100g başına
+   * referans değerleriyle birlikte. (FoodMatcher'ın `searchByNameWords`'ü
+   * geniş aday toplamak için OR kullanır; burada kullanıcıya daraltılmış
+   * sonuç gösterildiği için AND kullanılır.)
+   */
+  async searchWithFactsByName(
+    words: string[],
+    limit = 20,
+    db: Db = prisma,
+  ): Promise<(Food & { nutritionFacts: FoodNutritionFacts | null })[]> {
+    if (words.length === 0) return [];
+    return db.food.findMany({
+      where: {
+        nutritionFacts: { isNot: null },
+        AND: words.map((word) => ({
+          name: { contains: word, mode: "insensitive" as const },
+        })),
+      },
+      include: { nutritionFacts: true },
+      orderBy: { name: "asc" },
+      take: limit,
+    });
+  },
+
   async searchByNameWords(
     words: string[],
     limit = 20,

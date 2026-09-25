@@ -10,6 +10,9 @@ import type { CalculatedNutrition } from "@/types/nutrition";
  * erişebileceği hiçbir sorgu yazılmamalıdır (user isolation).
  */
 
+/** Listeleme ekranları için: meal item + besinin görünen adı. */
+export type MealItemWithFood = MealItem & { food: { name: string } };
+
 export interface CreateMealItemParams {
   userId: string;
   foodId: string;
@@ -138,5 +141,42 @@ export const mealRepository = {
       },
       orderBy: { createdAt: "asc" },
     });
+  },
+
+  /**
+   * `listMealItemsForUser` ile aynı kapsam, ek olarak besin adını taşır.
+   * Nutrition alanları DB'deki ADIM 16 snapshot'ıdır — burada hiçbir şey
+   * yeniden hesaplanmaz.
+   */
+  async listMealItemsWithFoodForUser(
+    userId: string,
+    range: { from: Date; to: Date },
+  ): Promise<MealItemWithFood[]> {
+    return prisma.mealItem.findMany({
+      where: {
+        userId,
+        status: "ACTIVE",
+        meal: { consumedAt: { gte: range.from, lt: range.to } },
+      },
+      include: { food: { select: { name: true } } },
+      orderBy: { createdAt: "asc" },
+    });
+  },
+
+  /**
+   * Kaydı fiziksel olarak silmez, `status = DELETED` yapar (günlük özetler
+   * yalnızca ACTIVE kayıtları toplar). `userId` filtresi WHERE koşulunun
+   * parçasıdır: başka bir kullanıcının kaydı için 0 satır etkilenir ve
+   * `false` döner — kaydın var olup olmadığı bile sızdırılmaz.
+   */
+  async softDeleteMealItemForUser(
+    userId: string,
+    mealItemId: string,
+  ): Promise<boolean> {
+    const result = await prisma.mealItem.updateMany({
+      where: { id: mealItemId, userId, status: "ACTIVE" },
+      data: { status: "DELETED" },
+    });
+    return result.count > 0;
   },
 };

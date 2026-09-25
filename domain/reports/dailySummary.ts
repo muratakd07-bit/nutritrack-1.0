@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
-import { startOfDayUTC, endOfDayUTC } from "@/lib/utils/date";
+import { addDaysUTC, startOfDayUTC, endOfDayUTC, toIsoDateUTC } from "@/lib/utils/date";
 import type { CalculatedNutrition } from "@/types/nutrition";
 
 export interface DailySummary extends CalculatedNutrition {
@@ -53,4 +53,31 @@ export async function getDailySummaryForUser(
     fiber_g: result._sum.fiberG ?? 0,
     item_count: result._count,
   };
+}
+
+export interface DatedDailySummary extends DailySummary {
+  /** UTC günü, "YYYY-MM-DD". */
+  date: string;
+}
+
+/**
+ * `endDate` dahil geriye doğru `days` günlük özetleri, eskiden yeniye
+ * sıralı döner. Her gün `getDailySummaryForUser` ile aynı şekilde yalnızca
+ * snapshot'lanmış değerleri toplar.
+ */
+export async function getDailySummariesForUser(
+  userId: string,
+  endDate: Date,
+  days: number,
+): Promise<DatedDailySummary[]> {
+  const dates = Array.from({ length: days }, (_, i) =>
+    addDaysUTC(endDate, i - (days - 1)),
+  );
+  const summaries = await Promise.all(
+    dates.map((date) => getDailySummaryForUser(userId, date)),
+  );
+  return summaries.map((summary, i) => ({
+    ...summary,
+    date: toIsoDateUTC(dates[i]),
+  }));
 }

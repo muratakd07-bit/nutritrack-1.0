@@ -10,7 +10,7 @@ vi.mock("@/lib/db/prisma", () => ({
   },
 }));
 
-import { getDailySummaryForUser } from "./dailySummary";
+import { getDailySummariesForUser, getDailySummaryForUser } from "./dailySummary";
 
 beforeEach(() => {
   mockAggregate.mockReset();
@@ -76,5 +76,30 @@ describe("getDailySummaryForUser", () => {
     const callArgs = mockAggregate.mock.calls[0][0];
     expect(callArgs.where.userId).toBe("user-42");
     expect(callArgs.where.status).toBe("ACTIVE");
+  });
+});
+
+describe("getDailySummariesForUser", () => {
+  it("bitiş günü dahil geriye doğru her gün için eskiden yeniye özet döner", async () => {
+    mockAggregate.mockResolvedValue({
+      _sum: { energyKcal: 100, proteinG: 1, carbohydratesG: 2, fatG: 3, fiberG: 4 },
+      _count: 1,
+    });
+
+    const result = await getDailySummariesForUser(
+      "user-1",
+      new Date("2026-10-02T15:00:00.000Z"),
+      3,
+    );
+
+    expect(result.map((r) => r.date)).toEqual([
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02",
+    ]);
+    expect(mockAggregate).toHaveBeenCalledTimes(3);
+    for (const call of mockAggregate.mock.calls) {
+      expect(call[0].where.userId).toBe("user-1");
+    }
   });
 });

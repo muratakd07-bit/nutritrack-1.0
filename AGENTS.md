@@ -91,6 +91,12 @@ Detaylar: [`domain/nutrition/README.md`](domain/nutrition/README.md).
 ## Katmanlar
 
 - `app/` — UI (App Router). `app/api/**/route.ts` — API/backend.
+  Oturumlu ekranlar `app/(app)/` route grubundadır (günlük görünüm `/`,
+  elle ekleme `/meals/add`, fotoğrafla ekleme `/meals/add-photo`,
+  `/reports`, `/profile`; ortak alt menü `app/(app)/layout.tsx`). Bu
+  sayfalar yalnızca API'den gelen snapshot/SUM değerlerini gösterir,
+  nutrition hesaplamaz; yetki kontrolü API route'larındadır (401 →
+  giriş ekranı). Gün sınırları sunucuyla aynı şekilde UTC'dir.
 - `domain/` — iş mantığı, katman katman ayrılmış: `nutrition/` (ADIM 16
   sınırı), `meal/`, `goals/`, `reports/`, `coach/`.
 - `lib/db/` — Prisma client singleton. `lib/auth/` — Supabase Auth

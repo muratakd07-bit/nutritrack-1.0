@@ -33,3 +33,11 @@ export interface MealItemRecord {
   created_at: string;
   updated_at: string;
 }
+
+/** Arayüzde gösterilen Türkçe öğün adları. */
+export const MEAL_TYPE_LABELS_TR: Record<MealType, string> = {
+  BREAKFAST: "Kahvaltı",
+  LUNCH: "Öğle Yemeği",
+  DINNER: "Akşam Yemeği",
+  SNACK: "Ara Öğün",
+};

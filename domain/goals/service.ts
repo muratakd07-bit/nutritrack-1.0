@@ -1,7 +1,7 @@
 import type { DailyNutritionGoal } from "@prisma/client";
 import { goalsRepository } from "./repository";
 import { resolveAssignedTrainerId } from "@/domain/authz/service";
-import type { DailyNutritionGoals } from "@/types/goals";
+import type { DailyNutritionGoalRecord, DailyNutritionGoals } from "@/types/goals";
 
 /**
  * Hedefleri kimin belirlediğini açıkça taşıyan aktör tipi. AI/coach
@@ -63,4 +63,21 @@ export async function setGoalsForUser(
     setBy: actor.type,
     setByTrainerId,
   });
+}
+
+/** Prisma kaydını API'nin dış yüzeyindeki snake_case şekle çevirir. */
+export function toGoalsDto(goal: DailyNutritionGoal): DailyNutritionGoalRecord {
+  return {
+    id: goal.id,
+    user_id: goal.userId,
+    energy_kcal: goal.energyKcal,
+    protein_g: goal.proteinG,
+    carbohydrates_g: goal.carbohydratesG,
+    fat_g: goal.fatG,
+    fiber_g: goal.fiberG,
+    water_ml: goal.waterMl,
+    set_by: goal.setBy,
+    set_by_trainer_id: goal.setByTrainerId,
+    effective_from: goal.effectiveFrom.toISOString(),
+  };
 }

@@ -3,8 +3,9 @@ import {
   nutritionSourceOfTruth as defaultNutritionSource,
   type NutritionSourceOfTruth,
 } from "@/domain/nutrition/contract";
-import { mealRepository } from "./repository";
+import { mealRepository, type MealItemWithFood } from "./repository";
 import type { MealItemInput } from "@/types/meal";
+import { endOfDayUTC, startOfDayUTC } from "@/lib/utils/date";
 
 export interface MealServiceDeps {
   nutritionSource?: NutritionSourceOfTruth;
@@ -71,4 +72,23 @@ export async function listMealItemsForUser(
   range?: { from: Date; to: Date },
 ): Promise<MealItem[]> {
   return mealRepository.listMealItemsForUser(userId, range);
+}
+
+/** Bir kullanıcının verilen UTC günündeki kayıtları, besin adlarıyla. */
+export async function listMealItemsWithFoodForUserOnDay(
+  userId: string,
+  day: Date,
+): Promise<MealItemWithFood[]> {
+  return mealRepository.listMealItemsWithFoodForUser(userId, {
+    from: startOfDayUTC(day),
+    to: endOfDayUTC(day),
+  });
+}
+
+/** Yalnızca çağıranın kendi kaydını siler; bulunamazsa/başkasınınsa `false`. */
+export async function deleteMealItemForUser(
+  userId: string,
+  mealItemId: string,
+): Promise<boolean> {
+  return mealRepository.softDeleteMealItemForUser(userId, mealItemId);
 }

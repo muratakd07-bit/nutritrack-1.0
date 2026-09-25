@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, type ChangeEvent } from "react";
-import { MEAL_TYPES, type MealType } from "@/types/meal";
+import { MEAL_TYPES, MEAL_TYPE_LABELS_TR, type MealType } from "@/types/meal";
 import type { CalculatedNutrition } from "@/types/nutrition";
 import { createSupabaseBrowserClient } from "@/lib/auth/supabaseBrowserClient";
 import { MEAL_PHOTOS_BUCKET, buildMealPhotoPath } from "@/lib/storage/mealPhotos";
@@ -429,7 +429,7 @@ export default function AddPhotoPage() {
                 >
                   {MEAL_TYPES.map((type) => (
                     <option key={type} value={type}>
-                      {type}
+                      {MEAL_TYPE_LABELS_TR[type]}
                     </option>
                   ))}
                 </select>
